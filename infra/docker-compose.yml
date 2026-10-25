@@ -1,0 +1,63 @@
+name: chainaudit
+
+# Every image below publishes an arm64 variant (Apple Silicon).
+services:
+  dynamodb:
+    image: amazon/dynamodb-local:3.3.1
+    # -sharedDb: one database regardless of region or access key.
+    # -inMemory: data resets on restart; seeding scripts recreate it.
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
+    ports:
+      - "8000:8000"
+
+  postgres:
+    image: postgres:17.11
+    environment:
+      POSTGRES_USER: chainaudit
+      POSTGRES_PASSWORD: chainaudit
+      POSTGRES_DB: chainaudit
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "chainaudit", "-d", "chainaudit"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  anvil:
+    image: ghcr.io/foundry-rs/foundry:v1.8.5
+    # The Foundry image's entrypoint is a shell, so the command is one string.
+    command: ["anvil --host 0.0.0.0 --chain-id 31337"]
+    ports:
+      - "8545:8545"
+    healthcheck:
+      test: ["CMD", "cast", "block-number", "--rpc-url", "http://localhost:8545"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # The app talks to Anvil only through this proxy (port 18545),
+  # so latency and failures can be injected through the API on 8474.
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.12.0
+    command: ["-host=0.0.0.0", "-config=/config/toxiproxy.json"]
+    ports:
+      - "8474:8474"
+      - "18545:18545"
+    volumes:
+      - ./toxiproxy/toxiproxy.json:/config/toxiproxy.json:ro
+    depends_on:
+      anvil:
+        condition: service_healthy
+
+  # Jaeger v2 is built on the OpenTelemetry Collector and receives OTLP itself.
+  jaeger:
+    image: jaegertracing/jaeger:2.22.0
+    ports:
+      - "16686:16686" # UI
+      - "4318:4318" # OTLP over HTTP
+
+volumes:
+  pgdata:
