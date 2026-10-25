@@ -1,0 +1,21 @@
+import { z } from 'zod'
+
+const configSchema = z
+  .object({
+    GATEWAY_PORT: z.coerce.number().int().positive().default(3000),
+    // Public base URL; the protected resource is `${GATEWAY_URL}/mcp`.
+    GATEWAY_URL: z.url().default('http://localhost:3000'),
+    ISSUER_URL: z.url().default('http://localhost:3002'),
+    JWKS_URL: z.url().optional(),
+    TOKEN_AUDIENCE: z.string().min(1).default('chainaudit-gateway'),
+    // Above the target's own 2 s provider timeout, so the target can report
+    // that timeout as a clear tool error before the gateway gives up.
+    TARGET_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
+  })
+  .transform((c) => ({ ...c, JWKS_URL: c.JWKS_URL ?? `${c.ISSUER_URL}/.well-known/jwks.json` }))
+
+export type Config = z.infer<typeof configSchema>
+
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+  return configSchema.parse(env)
+}

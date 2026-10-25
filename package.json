@@ -17,7 +17,8 @@
     "mcp:dev": "node src/apps/mcp-server/main.ts",
     "seed:anvil": "node scripts/seed-anvil.ts",
     "issuer:dev": "node src/apps/token-issuer/main.ts",
-    "hash-secret": "node scripts/hash-secret.ts"
+    "hash-secret": "node scripts/hash-secret.ts",
+    "gateway:dev": "node src/apps/gateway/main.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",

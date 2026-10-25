@@ -22,3 +22,17 @@ export class ProviderUnavailableError extends DomainError {
     super('PROVIDER_UNAVAILABLE', 'Node provider unavailable', options)
   }
 }
+
+/** The bearer token was rejected. `reason` is safe to return to the caller. */
+export class InvalidTokenError extends DomainError {
+  constructor(reason: string, options?: ErrorOptions) {
+    super('INVALID_TOKEN', reason, options)
+  }
+}
+
+/** The token could not be checked at all (e.g. issuer keys unreachable). */
+export class TokenVerifierUnavailableError extends DomainError {
+  constructor(options?: ErrorOptions) {
+    super('TOKEN_VERIFIER_UNAVAILABLE', 'Token verification is temporarily unavailable', options)
+  }
+}
