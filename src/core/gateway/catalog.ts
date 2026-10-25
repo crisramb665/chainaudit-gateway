@@ -45,3 +45,6 @@ export function scopesForTarget(principal: Principal, target: TargetConfig): str
   const used = new Set(Object.values(target.toolScopes))
   return principal.scopes.filter((scope) => used.has(scope)).sort()
 }
+
+/** One scope covers every tool on the caller's own tenant targets (their tool lists are not known in advance). */
+export const TENANT_TOOLS_SCOPE = 'tenant:tools'

@@ -20,9 +20,13 @@
     "hash-secret": "node scripts/hash-secret.ts",
     "gateway:dev": "node src/apps/gateway/main.ts",
     "verify": "bash scripts/verify.sh",
-    "test": "vitest run"
+    "test": "vitest run",
+    "tenant-sample:dev": "node src/apps/tenant-sample-server/main.ts",
+    "setup:dynamodb": "node scripts/setup-dynamodb.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-dynamodb": "3.1149.0",
+    "@aws-sdk/lib-dynamodb": "3.1149.0",
     "@modelcontextprotocol/sdk": "1.32.1",
     "express": "5.3.0",
     "jose": "6.2.12",

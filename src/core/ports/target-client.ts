@@ -1,5 +1,3 @@
-import type { TargetConfig } from '../gateway/targets.ts'
-
 /** A tool as a target describes it. Only `name` matters to the gateway; the rest passes through. */
 export interface ToolDefinition {
   name: string
@@ -13,17 +11,28 @@ export interface ToolResult {
   [key: string]: unknown
 }
 
+/** Where a target lives. Platform and tenant targets both reduce to this. */
+export interface TargetEndpoint {
+  id: string
+  url: string
+}
+
+/**
+ * The credential for one hop. Platform targets get a token minted for them by
+ * token exchange; tenant targets get the tenant's API key. Never the caller's token.
+ */
+export type TargetCredential = { kind: 'bearer'; token: string } | { kind: 'api_key'; key: string }
+
 export interface TargetCallContext {
-  /** A token minted for this target by token exchange, never the caller's token. */
-  accessToken: string
+  credential: TargetCredential
   traceparent: string
 }
 
-/** Talks to a backend MCP server. Throws on transport errors and timeouts. */
+/** Talks to a backend MCP server. Throws TargetCallError on transport errors and timeouts. */
 export interface TargetClient {
-  listTools(target: TargetConfig, context: TargetCallContext): Promise<ToolDefinition[]>
+  listTools(target: TargetEndpoint, context: TargetCallContext): Promise<ToolDefinition[]>
   callTool(
-    target: TargetConfig,
+    target: TargetEndpoint,
     context: TargetCallContext,
     tool: string,
     args: Record<string, unknown>,

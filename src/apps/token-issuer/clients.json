@@ -4,15 +4,22 @@
       "client_id": "agent-acme",
       "tenant_id": "acme",
       "allowed_grant_types": ["client_credentials"],
-      "allowed_scopes": ["chain:read", "recon:read", "recon:write"],
+      "allowed_scopes": ["chain:read", "recon:read", "recon:write", "tenant:tools"],
       "secret_hash": "scrypt$17$8$1$YvzK4uGlIAJ2zLg2--CerQ$0znhMeoOKLhkNhzaicgJvA0G3VfMf6tdfEAK4jP7cFs"
     },
     {
       "client_id": "agent-globex",
       "tenant_id": "globex",
       "allowed_grant_types": ["client_credentials"],
-      "allowed_scopes": ["chain:read"],
+      "allowed_scopes": ["chain:read", "tenant:tools"],
       "secret_hash": "scrypt$17$8$1$fXxQ3I8DgCknnxgWAC7Kfw$MZ3qfk2ftKcu4_nELq_ZvusYiBOXcFOvJcOLi4vRhbw"
+    },
+    {
+      "client_id": "acme-admin",
+      "tenant_id": "acme",
+      "allowed_grant_types": ["client_credentials"],
+      "allowed_scopes": ["registry:admin"],
+      "secret_hash": "scrypt$17$8$1$uGI_kqLbwnjkl-tT9w2jbQ$Y1YqfX2W3VNTxpwbo-9LxFBlTH74mg7yf55jJD2NG40"
     },
     {
       "client_id": "chainaudit-gateway",

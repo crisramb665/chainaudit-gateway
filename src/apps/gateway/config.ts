@@ -17,6 +17,13 @@ const configSchema = z
     GATEWAY_CLIENT_SECRET: z.string().min(1).default('gateway-local-secret'),
     TOKEN_ENDPOINT: z.url().optional(),
     EXCHANGE_TIMEOUT_MS: z.coerce.number().int().positive().default(2000),
+    // Tenant registry. An empty DYNAMODB_ENDPOINT means real AWS (default endpoint and credentials).
+    DYNAMODB_ENDPOINT: z.string().default('http://localhost:8000'),
+    AWS_REGION: z.string().min(1).default('us-east-1'),
+    REGISTRY_TABLE: z.string().min(1).default('chainaudit-registry'),
+    REGISTRY_CACHE_SECONDS: z.coerce.number().int().nonnegative().default(30),
+    // Local stand-in for Secrets Manager.
+    SECRETS_DIR: z.string().min(1).default('.secrets'),
   })
   .transform((c) => ({
     ...c,

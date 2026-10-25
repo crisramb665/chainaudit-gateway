@@ -1,9 +1,12 @@
 import { TokenExchangeError } from '../errors.ts'
+import type { CredentialProvider } from '../ports/credential-provider.ts'
 import type { Logger } from '../ports/logger.ts'
-import type { TargetClient, ToolDefinition, ToolResult } from '../ports/target-client.ts'
-import type { ExchangedToken, TokenExchanger } from '../ports/token-exchanger.ts'
+import type { TargetClient, TargetCredential, ToolDefinition, ToolResult } from '../ports/target-client.ts'
+import type { TenantTarget, TenantTargetReader } from '../ports/tenant-registry.ts'
+import type { TokenExchanger } from '../ports/token-exchanger.ts'
 import type { Principal } from '../ports/token-verifier.ts'
 import {
+  TENANT_TOOLS_SCOPE,
   isToolVisible,
   missingScope,
   namespacedName,
@@ -38,34 +41,40 @@ export interface GatewayService {
 export class DefaultGatewayService implements GatewayService {
   private readonly exchanger: TokenExchanger
   private readonly targetClient: TargetClient
-  private readonly targets: TargetConfig[]
+  private readonly platformTargets: TargetConfig[]
+  private readonly tenantTargets: TenantTargetReader
+  private readonly credentials: CredentialProvider
 
-  constructor(exchanger: TokenExchanger, targetClient: TargetClient, targets: TargetConfig[]) {
+  constructor(
+    exchanger: TokenExchanger,
+    targetClient: TargetClient,
+    platformTargets: TargetConfig[],
+    tenantTargets: TenantTargetReader,
+    credentials: CredentialProvider,
+  ) {
     this.exchanger = exchanger
     this.targetClient = targetClient
-    this.targets = targets
+    this.platformTargets = platformTargets
+    this.tenantTargets = tenantTargets
+    this.credentials = credentials
   }
 
   async listTools(caller: Caller, context: RequestContext): Promise<ToolDefinition[]> {
-    const perTarget = await Promise.allSettled(
-      this.targets.map(async (target): Promise<ToolDefinition[]> => {
-        // The caller holds no scope this target uses: nothing would be visible,
-        // so the target is not called at all.
-        const scopes = scopesForTarget(caller.principal, target)
-        if (scopes.length === 0) return []
-        const token = await this.tokenFor(caller, target, scopes)
-        context.logger.info('target token', { target_id: target.id, exchange: token.cache, scope: scopes.join(' ') })
-        const tools = await this.targetClient.listTools(target, this.callContext(token, context))
-        return tools
-          .filter((tool) => isToolVisible(caller.principal, target, tool.name))
-          .map((tool) => ({ ...tool, name: namespacedName(target.id, tool.name) }))
-      }),
-    )
+    const platform = this.platformTargets.map((target) => ({
+      id: target.id,
+      list: () => this.listPlatformTools(caller, target, context),
+    }))
+    const tenant = (await this.ownTenantTargets(caller, context)).map((target) => ({
+      id: target.targetId,
+      list: () => this.listTenantTools(caller, target, context),
+    }))
+    const perTarget = await Promise.allSettled([...platform, ...tenant].map((t) => t.list()))
+    const ids = [...platform, ...tenant].map((t) => t.id)
     // LEARN: A failing target drops out of the catalog instead of failing the
     // whole list, so one broken backend cannot hide every other target's tools.
     return perTarget.flatMap((result, i) => {
       if (result.status === 'fulfilled') return result.value
-      context.logger.error('target list failed', { target_id: this.targets[i]?.id, err: result.reason })
+      context.logger.error('target list failed', { target_id: ids[i], err: result.reason })
       return []
     })
   }
@@ -77,10 +86,79 @@ export class DefaultGatewayService implements GatewayService {
     context: RequestContext,
   ): Promise<ToolResult> {
     const parsed = parseNamespacedName(name)
-    const target = parsed && this.targets.find((t) => t.id === parsed.targetId)
-    const scope = parsed && target && requiredScope(target, parsed.tool)
-    if (!parsed || !target || !scope) return toolError(`Unknown tool ${name}`)
+    if (!parsed) return toolError(`Unknown tool ${name}`)
+    const platform = this.platformTargets.find((t) => t.id === parsed.targetId)
+    if (platform) return this.callPlatformTool(caller, platform, parsed.tool, name, args, context)
 
+    // Looked up among the caller's own tenant's targets only: another tenant's
+    // target ids are simply not in this list, so they answer "Unknown tool".
+    const tenantTarget = (await this.tenantTargetsOf(caller, context)).find((t) => t.targetId === parsed.targetId)
+    if (!tenantTarget) return toolError(`Unknown tool ${name}`)
+    const missing = missingScope(caller.principal, TENANT_TOOLS_SCOPE)
+    if (missing) {
+      context.logger.info('tool call denied', { tool: name, required_scope: missing })
+      return toolError(`Tool ${name} requires scope ${missing}`)
+    }
+
+    let credential: TargetCredential
+    try {
+      credential = await this.tenantCredential(caller, tenantTarget)
+    } catch (err) {
+      context.logger.error('tenant credential unavailable', { target_id: tenantTarget.targetId, tool: name, err })
+      return toolError(`Could not authorize the call to target ${tenantTarget.targetId}`)
+    }
+    try {
+      return await this.targetClient.callTool(
+        { id: tenantTarget.targetId, url: tenantTarget.baseUrl },
+        { credential, traceparent: context.traceparent },
+        parsed.tool,
+        args,
+      )
+    } catch (err) {
+      context.logger.error('target call failed', { target_id: tenantTarget.targetId, tool: name, err })
+      return toolError(`Target ${tenantTarget.targetId} is unavailable`)
+    }
+  }
+
+  private async listPlatformTools(
+    caller: Caller,
+    target: TargetConfig,
+    context: RequestContext,
+  ): Promise<ToolDefinition[]> {
+    // The caller holds no scope this target uses: nothing would be visible,
+    // so the target is not called at all.
+    const scopes = scopesForTarget(caller.principal, target)
+    if (scopes.length === 0) return []
+    const credential = await this.platformCredential(caller, target, scopes, context)
+    const tools = await this.targetClient.listTools(target, { credential, traceparent: context.traceparent })
+    return tools
+      .filter((tool) => isToolVisible(caller.principal, target, tool.name))
+      .map((tool) => ({ ...tool, name: namespacedName(target.id, tool.name) }))
+  }
+
+  private async listTenantTools(
+    caller: Caller,
+    target: TenantTarget,
+    context: RequestContext,
+  ): Promise<ToolDefinition[]> {
+    const credential = await this.tenantCredential(caller, target)
+    const tools = await this.targetClient.listTools(
+      { id: target.targetId, url: target.baseUrl },
+      { credential, traceparent: context.traceparent },
+    )
+    return tools.map((tool) => ({ ...tool, name: namespacedName(target.targetId, tool.name) }))
+  }
+
+  private async callPlatformTool(
+    caller: Caller,
+    target: TargetConfig,
+    tool: string,
+    name: string,
+    args: Record<string, unknown>,
+    context: RequestContext,
+  ): Promise<ToolResult> {
+    const scope = requiredScope(target, tool)
+    if (!scope) return toolError(`Unknown tool ${name}`)
     const missing = missingScope(caller.principal, scope)
     if (missing) {
       context.logger.info('tool call denied', { tool: name, required_scope: missing })
@@ -89,10 +167,9 @@ export class DefaultGatewayService implements GatewayService {
 
     try {
       // Only the one scope this tool needs, even if the caller holds more.
-      const token = await this.tokenFor(caller, target, [scope])
-      context.logger.info('target token', { target_id: target.id, exchange: token.cache, scope })
+      const credential = await this.platformCredential(caller, target, [scope], context)
       // The target's result, including its own isError results, passes through unchanged.
-      return await this.targetClient.callTool(target, this.callContext(token, context), parsed.tool, args)
+      return await this.targetClient.callTool(target, { credential, traceparent: context.traceparent }, tool, args)
     } catch (err) {
       if (err instanceof TokenExchangeError) {
         context.logger.error('token exchange failed', { target_id: target.id, tool: name, err })
@@ -103,18 +180,45 @@ export class DefaultGatewayService implements GatewayService {
     }
   }
 
-  /** A token for exactly this target and these scopes, on behalf of the caller. */
-  private tokenFor(caller: Caller, target: TargetConfig, scopes: string[]): Promise<ExchangedToken> {
-    return this.exchanger.exchange({
+  /** A token for exactly this platform target and these scopes, on behalf of the caller. */
+  private async platformCredential(
+    caller: Caller,
+    target: TargetConfig,
+    scopes: string[],
+    context: RequestContext,
+  ): Promise<TargetCredential> {
+    const token = await this.exchanger.exchange({
       subjectToken: caller.subjectToken,
       subjectTokenId: caller.principal.tokenId,
       audience: target.audience,
       scopes,
     })
+    context.logger.info('target token', { target_id: target.id, exchange: token.cache, scope: scopes.join(' ') })
+    return { kind: 'bearer', token: token.accessToken }
   }
 
-  private callContext(token: ExchangedToken, context: RequestContext) {
-    return { accessToken: token.accessToken, traceparent: context.traceparent }
+  // LEARN: A tenant target is a third party's server. It gets the tenant's own
+  // API key and nothing else: never the agent token and never a token minted
+  // by our issuer, because any of those would let that server call our
+  // platform as the agent (the confused deputy again, one hop further).
+  private async tenantCredential(caller: Caller, target: TenantTarget): Promise<TargetCredential> {
+    return { kind: 'api_key', key: await this.credentials.getSecret(caller.principal, target.secretRef) }
+  }
+
+  /** The caller's tenant targets, when the caller may use them at all. */
+  private async ownTenantTargets(caller: Caller, context: RequestContext): Promise<TenantTarget[]> {
+    if (missingScope(caller.principal, TENANT_TOOLS_SCOPE)) return []
+    return this.tenantTargetsOf(caller, context)
+  }
+
+  private async tenantTargetsOf(caller: Caller, context: RequestContext): Promise<TenantTarget[]> {
+    try {
+      // The tenant comes from the verified principal, never from the request.
+      return await this.tenantTargets.listActiveTargets(caller.principal.tenantId)
+    } catch (err) {
+      context.logger.error('tenant targets unavailable', { err })
+      return []
+    }
   }
 }
 

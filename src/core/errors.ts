@@ -43,3 +43,17 @@ export class TokenExchangeError extends DomainError {
     super('TOKEN_EXCHANGE_FAILED', 'Could not obtain a token for the target', options)
   }
 }
+
+/** A call to a target failed. `reason` is coarse and safe (no URLs, no stack). */
+export class TargetCallError extends DomainError {
+  constructor(reason: string, options?: ErrorOptions) {
+    super('TARGET_CALL_FAILED', reason, options)
+  }
+}
+
+/** A credential was requested for a tenant other than the caller's. */
+export class CredentialAccessDeniedError extends DomainError {
+  constructor(options?: ErrorOptions) {
+    super('CREDENTIAL_ACCESS_DENIED', 'Credential belongs to another tenant', options)
+  }
+}

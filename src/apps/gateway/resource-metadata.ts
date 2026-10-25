@@ -2,8 +2,13 @@ import type { Request, Response } from 'express'
 import type { TargetConfig } from '../../core/gateway/targets.ts'
 
 /** OAuth 2.0 Protected Resource Metadata (RFC 9728) for the gateway's /mcp endpoint. */
-export function protectedResourceMetadata(resource: string, issuer: string, targets: TargetConfig[]) {
-  const scopes = new Set(targets.flatMap((t) => Object.values(t.toolScopes)))
+export function protectedResourceMetadata(
+  resource: string,
+  issuer: string,
+  targets: TargetConfig[],
+  extraScopes: string[] = [],
+) {
+  const scopes = new Set([...targets.flatMap((t) => Object.values(t.toolScopes)), ...extraScopes])
   return {
     resource,
     authorization_servers: [issuer],
