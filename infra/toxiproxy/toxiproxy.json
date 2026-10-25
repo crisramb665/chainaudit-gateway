@@ -4,5 +4,11 @@
     "listen": "0.0.0.0:18545",
     "upstream": "anvil:8545",
     "enabled": true
+  },
+  {
+    "name": "acme-notes",
+    "listen": "0.0.0.0:13003",
+    "upstream": "host.docker.internal:3003",
+    "enabled": true
   }
 ]

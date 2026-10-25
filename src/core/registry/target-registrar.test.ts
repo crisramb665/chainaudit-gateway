@@ -202,7 +202,7 @@ describe('DefaultTargetRegistrar (gateway core)', () => {
   })
 
   it('leaves the target pending with the reason when the probe fails', async () => {
-    const { registrar } = build(new FakeProbe(new TargetCallError('rejected the credentials (HTTP 401)')))
+    const { registrar } = build(new FakeProbe(new TargetCallError('http_4xx', 'rejected the credentials (HTTP 401)')))
 
     const outcome = await registrar.register(admin, NOTES, context)
 

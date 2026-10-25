@@ -6,7 +6,8 @@
 #
 # Since task 5a it also needs `pnpm setup:dynamodb` (after infra:up) and the
 # tenant sample server (`pnpm tenant-sample:dev`). It registers tenant targets
-# for acme; re-running is safe because registration is idempotent.
+# for acme (notes goes through the Toxiproxy proxy acme-notes on :13003);
+# re-running is safe because registration is idempotent.
 #
 # Usage: pnpm verify            (or: bash scripts/verify.sh)
 #        pnpm verify --no-faults (skip the Toxiproxy fault-injection checks)
@@ -92,7 +93,7 @@ text_of() { printf '%s' "$1" | js 'j.result.content[0].text'; }
 # ---------- preflight ----------
 section "Preflight"
 missing=0
-for svc in "Anvil:8545" "Toxiproxy:8474" "DynamoDB:8000" "Issuer:3002" "MCP server:3001" "Gateway:3000" "Tenant sample server:3003"; do
+for svc in "Anvil:8545" "Toxiproxy:8474" "DynamoDB:8000" "Issuer:3002" "MCP server:3001" "Gateway:3000" "Tenant sample server:3003" "acme-notes proxy:13003"; do
   name=${svc%:*}; port=${svc##*:}
   if nc -z localhost "$port" 2>/dev/null; then pass "$name listening on $port"; else fail "$name listening on $port" "port open" "closed"; missing=1; fi
 done
@@ -253,7 +254,7 @@ expect_eq "acme CONFIG allows only hostnames (localhost)" '["localhost"]' \
   "$(ddb GetItem '{"TableName":"chainaudit-registry","Key":{"PK":{"S":"TENANT#acme"},"SK":{"S":"CONFIG"}}}' | js 'j.Item.allowed_domains.L.map(x => x.S)')"
 
 ADMIN=$(token acme-admin:acme-admin-local-secret)
-NOTES=$(target_body notes http://localhost:3003/mcp acme-sample-key)
+NOTES=$(target_body notes http://localhost:13003/mcp acme-sample-key)
 admin_post "$ADMIN" "$NOTES"
 expect_eq "register notes -> 201 (first run) or 200 (already there), status active" "ok active" \
   "$([[ $STATUS == 201 || $STATUS == 200 ]] && echo ok || echo "$STATUS") $(printf '%s' "$BODY" | js 'j.status')"
@@ -262,7 +263,7 @@ expect_eq "response carries secret_ref, never the key" "/tenants/acme/targets/no
 VERSION=$(printf '%s' "$BODY" | js 'j.version')
 admin_post "$ADMIN" "$NOTES"
 expect_eq "same registration again -> 200, same version (idempotent)" "200 $VERSION" "$STATUS $(printf '%s' "$BODY" | js 'j.version')"
-admin_post "$ADMIN" "$(target_body notes http://localhost:3003/mcp acme-sample-key 'Another name')"
+admin_post "$ADMIN" "$(target_body notes http://localhost:13003/mcp acme-sample-key 'Another name')"
 expect_eq "same id, different definition -> 409 conflict" "409 conflict" "$STATUS $(printf '%s' "$BODY" | js 'j.error')"
 AT=$(token agent-acme:acme-local-secret)
 admin_post "$AT" "$NOTES"
@@ -285,7 +286,7 @@ expect_eq "fourth target (acme max_targets 3) -> 429 quota_exceeded" "429 quota_
 rpc "$GATEWAY/mcp" "$AT" "$LIST"
 expect_has "acme catalog includes its own tenant tool" "notes__get_client_note" "$(printf '%s' "$BODY" | js 'j.result.tools.map(t => t.name).join(" ")')"
 rpc "$GATEWAY/mcp" "$G" "$LIST"
-expect_eq "globex catalog has no acme tools" '["chain__get_balance"]' "$(printf '%s' "$BODY" | js 'j.result.tools.map(t => t.name)')"
+expect_eq "globex catalog has no acme tools" "false" "$(printf '%s' "$BODY" | js 'j.result.tools.some(t => t.name.startsWith("notes"))')"
 rpc "$GATEWAY/mcp" "$AT" "$NOTE_CALL"
 expect_has "acme calls its tenant tool (API key, pinned connection)" "multisig" "$(printf '%s' "$BODY" | js 'j.result.structuredContent?.note')"
 rpc "$GATEWAY/mcp" "$G" "$NOTE_CALL"

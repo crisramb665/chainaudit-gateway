@@ -44,10 +44,29 @@ export class TokenExchangeError extends DomainError {
   }
 }
 
+export type TargetFailureKind = 'timeout' | 'connection' | 'http_5xx' | 'http_4xx' | 'protocol'
+
 /** A call to a target failed. `reason` is coarse and safe (no URLs, no stack). */
 export class TargetCallError extends DomainError {
-  constructor(reason: string, options?: ErrorOptions) {
+  readonly kind: TargetFailureKind
+
+  constructor(kind: TargetFailureKind, reason: string, options?: ErrorOptions) {
     super('TARGET_CALL_FAILED', reason, options)
+    this.kind = kind
+  }
+}
+
+/** Failures that say the target is unhealthy. A 4xx or protocol error means it answered. */
+export function isTargetFailure(err: unknown): boolean {
+  return (
+    err instanceof TargetCallError && (err.kind === 'timeout' || err.kind === 'connection' || err.kind === 'http_5xx')
+  )
+}
+
+/** The circuit for this tenant and target is open: the call was not attempted. */
+export class CircuitOpenError extends DomainError {
+  constructor() {
+    super('CIRCUIT_OPEN', 'Circuit open')
   }
 }
 

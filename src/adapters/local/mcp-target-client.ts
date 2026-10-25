@@ -54,6 +54,7 @@ export class McpTargetClient implements TargetClient {
   ): Promise<T> {
     // A per-call SDK client (and, for tenant targets, a per-call connection
     // pool) is this adapter's implementation, not an injected dependency.
+    const timeoutMs = context.timeoutMs ?? this.timeoutMs
     const pinned = context.connectTo ? pinnedAgent(context.connectTo) : undefined
     const baseFetch: FetchLike = pinned
       ? // undici's fetch and the global one share an implementation but not their
@@ -68,14 +69,14 @@ export class McpTargetClient implements TargetClient {
       // 60 s) rejects the pending request, but does not close the socket. The
       // fetch-level AbortSignal does, so a hung target cannot hold connections.
       fetch: (url, init) => {
-        const signal = AbortSignal.timeout(this.timeoutMs)
+        const signal = AbortSignal.timeout(timeoutMs)
         return baseFetch(url, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal })
       },
     })
     const client = new Client({ name: 'chainaudit-gateway', version: '0.1.0' })
     try {
-      await client.connect(transport, { timeout: this.timeoutMs })
-      return await fn(client, { timeout: this.timeoutMs })
+      await client.connect(transport, { timeout: timeoutMs })
+      return await fn(client, { timeout: timeoutMs })
     } catch (err) {
       throw toTargetCallError(err)
     } finally {
@@ -116,19 +117,26 @@ function credentialHeader(credential: TargetCredential): Record<string, string> 
 function toTargetCallError(err: unknown): TargetCallError {
   if (err instanceof TargetCallError) return err
   if (err instanceof StreamableHTTPError && (err.code === 401 || err.code === 403)) {
-    return new TargetCallError(`rejected the credentials (HTTP ${err.code})`, { cause: err })
+    return new TargetCallError('http_4xx', `rejected the credentials (HTTP ${err.code})`, { cause: err })
+  }
+  if (err instanceof StreamableHTTPError && typeof err.code === 'number' && err.code >= 500) {
+    return new TargetCallError('http_5xx', `answered HTTP ${err.code}`, { cause: err })
   }
   if (err instanceof StreamableHTTPError && typeof err.code === 'number' && err.code > 0) {
-    return new TargetCallError(`answered HTTP ${err.code}`, { cause: err })
+    return new TargetCallError('http_4xx', `answered HTTP ${err.code}`, { cause: err })
   }
   if (
     (err instanceof McpError && err.code === ErrorCode.RequestTimeout) ||
     (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError'))
   ) {
-    return new TargetCallError('timed out', { cause: err })
+    return new TargetCallError('timeout', 'timed out', { cause: err })
   }
   const code = (err as { cause?: { code?: string } })?.cause?.code
-  if (code === 'ECONNREFUSED') return new TargetCallError('connection refused', { cause: err })
-  if (code === 'ENOTFOUND') return new TargetCallError('host not found', { cause: err })
-  return new TargetCallError('protocol error', { cause: err })
+  if (code === 'ECONNREFUSED') return new TargetCallError('connection', 'connection refused', { cause: err })
+  if (code === 'ENOTFOUND') return new TargetCallError('connection', 'host not found', { cause: err })
+  // fetch's network failures (reset, closed socket, ...) arrive as TypeError with a cause.
+  if (err instanceof TypeError && code !== undefined) {
+    return new TargetCallError('connection', 'connection failed', { cause: err })
+  }
+  return new TargetCallError('protocol', 'protocol error', { cause: err })
 }

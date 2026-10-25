@@ -7,7 +7,7 @@
 // or any HTTP. Constructor injection is what makes that possible.
 import { describe, expect, it } from 'vitest'
 import { DefaultEgressValidator } from '../egress/egress-validator.ts'
-import { CredentialAccessDeniedError } from '../errors.ts'
+import { CredentialAccessDeniedError, TargetCallError } from '../errors.ts'
 import type { CredentialProvider } from '../ports/credential-provider.ts'
 import type { DnsResolver } from '../ports/dns-resolver.ts'
 import type { Logger } from '../ports/logger.ts'
@@ -21,6 +21,7 @@ import type {
 import type { TenantSettings, TenantTarget, TenantTargetReader } from '../ports/tenant-registry.ts'
 import type { ExchangedToken, TokenExchanger, TokenExchangeRequest } from '../ports/token-exchanger.ts'
 import type { Principal } from '../ports/token-verifier.ts'
+import { CircuitBreakers } from '../resilience/circuit-breakers.ts'
 import { DefaultGatewayService } from './gateway-service.ts'
 import type { TargetConfig } from './targets.ts'
 
@@ -43,6 +44,14 @@ const ACME_NOTES: TenantTarget = {
   createdAt: '2026-10-25T00:00:00.000Z',
 }
 
+const GLOBEX_LEDGER: TenantTarget = {
+  ...ACME_NOTES,
+  tenantId: 'globex',
+  targetId: 'ledger',
+  baseUrl: 'https://ledger.example.com/mcp',
+  secretRef: '/tenants/globex/targets/ledger',
+}
+
 class FakeTokenExchanger implements TokenExchanger {
   readonly requests: TokenExchangeRequest[] = []
 
@@ -55,6 +64,8 @@ class FakeTokenExchanger implements TokenExchanger {
 /** Answers per target id and records every call. */
 class FakeTargetClient implements TargetClient {
   readonly calls: Array<{ target: string; tool: string; context: TargetCallContext }> = []
+  /** Target ids that time out, like a target behind a 3 s latency toxic. */
+  readonly failing = new Set<string>()
   private readonly toolsByTarget: Record<string, ToolDefinition[]>
 
   constructor(toolsByTarget: Record<string, ToolDefinition[]>) {
@@ -67,6 +78,7 @@ class FakeTargetClient implements TargetClient {
 
   async callTool(target: TargetEndpoint, context: TargetCallContext, tool: string): Promise<ToolResult> {
     this.calls.push({ target: target.id, tool, context })
+    if (this.failing.has(target.id)) throw new TargetCallError('timeout', 'timed out')
     return { content: [{ type: 'text', text: 'ok' }] }
   }
 }
@@ -77,11 +89,11 @@ class FakeTenantTargets implements TenantTargetReader {
 
   async listActiveTargets(tenantId: string): Promise<TenantTarget[]> {
     this.askedFor.push(tenantId)
-    return tenantId === 'acme' ? [ACME_NOTES] : []
+    return tenantId === 'acme' ? [ACME_NOTES] : [GLOBEX_LEDGER]
   }
 
   async getTenantSettings(tenantId: string): Promise<TenantSettings | undefined> {
-    return { allowedDomains: tenantId === 'acme' ? ['example.com'] : [], maxTargets: 3 }
+    return { allowedDomains: ['example.com'], maxTargets: 3 }
   }
 }
 
@@ -112,6 +124,8 @@ function caller(scopes: string[], tenantId = 'acme') {
   return { principal, subjectToken: 'agent-token' }
 }
 
+const clock = { nowSeconds: () => 1_800_000_000 }
+
 function build(toolsByTarget: Record<string, ToolDefinition[]> = {}) {
   const exchanger = new FakeTokenExchanger()
   const targets = new FakeTargetClient(toolsByTarget)
@@ -126,6 +140,8 @@ function build(toolsByTarget: Record<string, ToolDefinition[]> = {}) {
     tenantTargets,
     new FakeCredentials(),
     egress,
+    new CircuitBreakers(clock, { windowSize: 10, failureRate: 0.5, openSeconds: 15 }),
+    { tenantTargetTimeoutMs: 2000 },
   )
   return { gateway, exchanger, targets, tenantTargets, resolver }
 }
@@ -180,7 +196,7 @@ describe('DefaultGatewayService (gateway core)', () => {
     const globexTools = await globex.gateway.listTools(caller(['chain:read', 'tenant:tools'], 'globex'), context)
 
     expect(acme.map((t) => t.name)).toEqual(['chain__get_balance', 'notes__get_client_note'])
-    expect(globexTools.map((t) => t.name)).toEqual(['chain__get_balance'])
+    expect(globexTools.map((t) => t.name)).not.toContain('notes__get_client_note')
     // The registry is only ever asked about the caller's own tenant.
     expect(globex.tenantTargets.askedFor).toEqual(['globex'])
   })
@@ -206,8 +222,9 @@ describe('DefaultGatewayService (gateway core)', () => {
         context: {
           credential: { kind: 'api_key', key: 'acme-sample-key' },
           traceparent: context.traceparent,
-          // Pinned to the address that was just validated.
+          // Pinned to the address that was just validated, with the tenant timeout.
           connectTo: ['93.184.216.34'],
+          timeoutMs: 2000,
         },
       },
     ])
@@ -253,5 +270,25 @@ describe('DefaultGatewayService (gateway core)', () => {
       content: [{ type: 'text', text: 'Target notes failed egress validation' }],
     })
     expect(targets.calls).toEqual([])
+  })
+
+  it("opens only acme's breaker for its failing target; acme's platform tool and globex keep working", async () => {
+    const { gateway, targets } = build()
+    targets.failing.add('notes')
+    const acme = caller(['chain:read', 'tenant:tools'])
+
+    for (let i = 0; i < 10; i++) await gateway.callTool(acme, 'notes__get_client_note', {}, context)
+    const callsBefore = targets.calls.length
+    const open = await gateway.callTool(acme, 'notes__get_client_note', {}, context)
+
+    expect(open).toEqual({
+      isError: true,
+      content: [{ type: 'text', text: 'Target notes is temporarily unavailable (circuit open)' }],
+    })
+    expect(targets.calls.length).toBe(callsBefore) // rejected without calling the target
+
+    await gateway.callTool(acme, 'chain__get_balance', {}, context)
+    await gateway.callTool(caller(['tenant:tools'], 'globex'), 'ledger__get_client_note', {}, context)
+    expect(targets.calls.slice(callsBefore).map((c) => c.target)).toEqual(['chain', 'ledger'])
   })
 })

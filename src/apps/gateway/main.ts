@@ -22,6 +22,7 @@ import { TENANT_TOOLS_SCOPE } from '../../core/gateway/catalog.ts'
 import { DefaultGatewayService } from '../../core/gateway/gateway-service.ts'
 import { CachingTenantTargetReader } from '../../core/registry/caching-target-reader.ts'
 import { DefaultTargetRegistrar } from '../../core/registry/target-registrar.ts'
+import { CircuitBreakers } from '../../core/resilience/circuit-breakers.ts'
 import { BearerAuthenticator } from '../shared/bearer-auth.ts'
 import { McpHttpHandler } from '../shared/mcp-http-handler.ts'
 import { parseConfig } from './config.ts'
@@ -74,7 +75,22 @@ const tenantTargets = new CachingTenantTargetReader(registry, clock, {
   ttlSeconds: config.REGISTRY_CACHE_SECONDS,
   maxTenants: 1000,
 })
-const gateway = new DefaultGatewayService(exchanger, targetClient, STATIC_TARGETS, tenantTargets, credentials, egress)
+// One breaker per tenant + target, in memory in this process.
+const breakers = new CircuitBreakers(clock, {
+  windowSize: config.BREAKER_WINDOW,
+  failureRate: config.BREAKER_FAILURE_RATE,
+  openSeconds: config.BREAKER_OPEN_SECONDS,
+})
+const gateway = new DefaultGatewayService(
+  exchanger,
+  targetClient,
+  STATIC_TARGETS,
+  tenantTargets,
+  credentials,
+  egress,
+  breakers,
+  { tenantTargetTimeoutMs: config.TENANT_TARGET_TIMEOUT_MS },
+)
 const registrar = new DefaultTargetRegistrar(registry, credentials, targetClient, egress, clock, {
   reservedTargetIds: STATIC_TARGETS.map((t) => t.id),
 })

@@ -22,6 +22,13 @@
       "secret_hash": "scrypt$17$8$1$uGI_kqLbwnjkl-tT9w2jbQ$Y1YqfX2W3VNTxpwbo-9LxFBlTH74mg7yf55jJD2NG40"
     },
     {
+      "client_id": "globex-admin",
+      "tenant_id": "globex",
+      "allowed_grant_types": ["client_credentials"],
+      "allowed_scopes": ["registry:admin"],
+      "secret_hash": "scrypt$17$8$1$zmzCJm8OKiYY7UhWeHocHg$t521h9AqfvNOVK9P5dbMJs2UaztF-Ap4F0XyERtmDVk"
+    },
+    {
       "client_id": "chainaudit-gateway",
       "allowed_grant_types": ["urn:ietf:params:oauth:grant-type:token-exchange"],
       "subject_audience": "chainaudit-gateway",

@@ -32,6 +32,8 @@ export interface TargetCallContext {
    * the URL's hostname for the Host header and TLS. Platform targets omit it.
    */
   connectTo?: string[]
+  /** Overrides the client's default timeout for this call (tenant targets use a shorter one). */
+  timeoutMs?: number
 }
 
 /** Talks to a backend MCP server. Throws TargetCallError on transport errors and timeouts. */

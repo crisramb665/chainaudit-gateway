@@ -53,12 +53,13 @@ pnpm seed:anvil
 
 Expected: five lines like `#0 -> #1  1 ETH  block N  0x…`, then the balances. Account #1 (`0x7099…79C8`) ends up at about 9999.5 ETH.
 
-## 5. Start the four services (one terminal each, in this order)
+## 5. Start the services (one terminal each, in this order)
 
 ```bash
 pnpm issuer:dev          # {"msg":"token issuer listening","port":3002,…,"kid":"…"}  (creates .keys/ on first run)
 pnpm mcp:dev             # {"msg":"mcp server listening","port":3001,…,"audience":"chainaudit-mcp"}
-pnpm tenant-sample:dev   # {"msg":"tenant sample server listening","port":3003}
+pnpm tenant-sample:dev   # {"msg":"tenant sample server listening","port":3003}   (acme's, reached through Toxiproxy :13003)
+pnpm tenant-sample-globex:dev   # {"msg":"tenant sample server listening","port":3004}   (globex's, direct; only for step 7k)
 pnpm gateway:dev         # {"level":"warn","msg":"egress: private networks allowed for tenant targets (APP_ENV=local)",…}
                          # {"msg":"gateway listening","port":3000,…,"targets":["chain"],"registry":"chainaudit-registry","app_env":"local"}
 ```
@@ -347,15 +348,15 @@ ADMIN=$(tok acme-admin:acme-admin-local-secret | at)
 AT=$(tok agent-acme:acme-local-secret | at)
 G=$(tok agent-globex:globex-local-secret | at)
 
-# 5a.1 Register -> {…,"secret_ref":"/tenants/acme/targets/notes","status":"active","version":2,…} 201 (200 if it exists)
-reg "$ADMIN" "$(tgt notes http://localhost:3003/mcp acme-sample-key)"
+# 5a.1 Register (through the acme-notes proxy) -> {…,"secret_ref":"/tenants/acme/targets/notes","status":"active","version":2,…} 201 (200 if it exists)
+reg "$ADMIN" "$(tgt notes http://localhost:13003/mcp acme-sample-key)"
 
 # 5a.2 Same again -> same body, 200 ; different name -> {"error":"conflict",…} 409
-reg "$ADMIN" "$(tgt notes http://localhost:3003/mcp acme-sample-key)"
-reg "$ADMIN" "$(tgt notes http://localhost:3003/mcp acme-sample-key 'Another name')"
+reg "$ADMIN" "$(tgt notes http://localhost:13003/mcp acme-sample-key)"
+reg "$ADMIN" "$(tgt notes http://localhost:13003/mcp acme-sample-key 'Another name')"
 
 # 5a.3 Agent token -> {"error":"insufficient_scope",…} 403
-reg "$AT" "$(tgt notes http://localhost:3003/mcp acme-sample-key)"
+reg "$AT" "$(tgt notes http://localhost:13003/mcp acme-sample-key)"
 
 # 5a.4 Wrong key -> "status":"pending","status_reason":"health probe failed: rejected the credentials (HTTP 401)"
 reg "$ADMIN" "$(tgt notes2 http://localhost:3003/mcp wrong-key-123 'Bad key')"
@@ -423,6 +424,39 @@ Restart with `pnpm gateway:dev` afterwards.
 
 **j. Registry cache staleness (task 5a).** Within 30 s of the first acme `tools/list`, a target change in DynamoDB isn't visible to routing yet. After 30 s it is. That's the trade-off documented in `caching-target-reader.ts`.
 
+
+**k. Circuit breaker and tenant isolation (task 6).** You need the globex sample server (`pnpm tenant-sample-globex:dev`) and acme's `notes` registered through :13003 (by `pnpm verify` or 5a.1). Paste the 6b helpers first.
+
+```bash
+GADMIN=$(tok globex-admin:globex-admin-local-secret | at)
+reg "$GADMIN" "$(tgt ledger http://localhost:3004/mcp globex-sample-key 'Globex notes')"   # 201 (or 200), "status":"active"
+AT=$(tok agent-acme:acme-local-secret | at); G=$(tok agent-globex:globex-local-secret | at)
+note() { printf '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"%s","arguments":{"client_name":"Northwind Ltd"}}}' "$1"; }
+txt() { sed -n '$p' | node -pe 'const r = JSON.parse(require("fs").readFileSync(0)).result; r.structuredContent?.note ?? r.content[0].text'; }
+
+pnpm chaos status                 # anvil: … no toxics / acme-notes: 0.0.0.0:13003 -> host.docker.internal:3003 (enabled) no toxics
+mcp localhost:3000/mcp "$AT" "$(note notes__get_client_note)" | txt    # the Northwind note (proxy works)
+
+pnpm chaos add acme-notes         # acme-notes: +3000 ms latency
+for i in $(seq 1 10); do /usr/bin/time -p curl -s -o /dev/null localhost:3000/mcp -H "Authorization: Bearer $AT" \
+  -H "$J" -H "$ACC" -d "$(note notes__get_client_note)" 2>&1 | grep real; done
+# first calls: real ~2.0 each (the 2 s tenant timeout, "Target notes is unavailable")
+# once the last 10 calls are at least 50% failures (after 5 to 10 failures, depending on how many
+# earlier successes are still in the window) the gateway logs
+#   {"level":"warn","msg":"circuit breaker transition","tenant_id":"acme","target_id":"notes","from":"closed","to":"open",…}
+# and the remaining calls in the loop take ~0.0x s
+
+time (mcp localhost:3000/mcp "$AT" "$(note notes__get_client_note)" | txt)
+# "Target notes is temporarily unavailable (circuit open)", real ~0.0x s: the target is not called
+mcp localhost:3000/mcp "$G" "$(note ledger__get_client_note)" | txt   # globex: the Northwind note, unaffected
+mcp localhost:3000/mcp "$AT" "$(call chain__get_balance)" | sed -n '$p'   # acme's platform tool chain__get_balance still answers
+
+pnpm chaos remove acme-notes      # acme-notes: latency removed
+sleep 15; mcp localhost:3000/mcp "$AT" "$(note notes__get_client_note)" | txt   # the note again
+# gateway log: "from":"open","to":"half_open" then "from":"half_open","to":"closed"
+```
+
+To watch a failed probe instead, keep the toxic, wait 15 s and call once. The log shows `half_open` → `open`, and the next call is rejected for another 15 s.
 
 ## Stop everything
 

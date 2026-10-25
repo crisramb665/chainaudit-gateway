@@ -22,7 +22,9 @@
     "verify": "bash scripts/verify.sh",
     "test": "vitest run",
     "tenant-sample:dev": "node src/apps/tenant-sample-server/main.ts",
-    "setup:dynamodb": "node scripts/setup-dynamodb.ts"
+    "setup:dynamodb": "node scripts/setup-dynamodb.ts",
+    "tenant-sample-globex:dev": "SAMPLE_PORT=3004 SAMPLE_API_KEY=globex-sample-key node src/apps/tenant-sample-server/main.ts",
+    "chaos": "node scripts/chaos.ts"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "3.1149.0",

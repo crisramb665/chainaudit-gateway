@@ -46,6 +46,11 @@ services:
     ports:
       - "8474:8474"
       - "18545:18545"
+      # acme's tenant sample server (on the host, :3003) behind a proxy, for chaos tests.
+      - "13003:13003"
+    # Built into Docker Desktop; needed on Linux so the proxy can reach the host.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./toxiproxy/toxiproxy.json:/config/toxiproxy.json:ro
     depends_on:

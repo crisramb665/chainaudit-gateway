@@ -27,6 +27,11 @@ const configSchema = z
     // Production unless explicitly local: the safe default.
     APP_ENV: z.enum(['local', 'production']).default('production'),
     DNS_TIMEOUT_MS: z.coerce.number().int().positive().default(2000),
+    // Tenant targets are third parties: the RFC's 2 s per provider call.
+    TENANT_TARGET_TIMEOUT_MS: z.coerce.number().int().positive().default(2000),
+    BREAKER_WINDOW: z.coerce.number().int().positive().default(10),
+    BREAKER_FAILURE_RATE: z.coerce.number().gt(0).max(1).default(0.5),
+    BREAKER_OPEN_SECONDS: z.coerce.number().int().positive().default(15),
   })
   .transform((c) => ({
     ...c,
