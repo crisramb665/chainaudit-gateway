@@ -1,14 +1,28 @@
 import type { LogFields, Logger } from '../../core/ports/logger.ts'
 
-export function createJsonLogger(base: LogFields = {}): Logger {
-  const write = (level: string, msg: string, fields?: LogFields) => {
-    const line = { ts: new Date().toISOString(), level, msg, ...base, ...fields }
-    process.stdout.write(`${JSON.stringify(line, errorReplacer)}\n`)
+/** One JSON line per log entry on stdout. */
+export class JsonLogger implements Logger {
+  private readonly base: LogFields
+
+  constructor(base: LogFields = {}) {
+    this.base = base
   }
-  return {
-    info: (msg, fields) => write('info', msg, fields),
-    error: (msg, fields) => write('error', msg, fields),
-    child: (fields) => createJsonLogger({ ...base, ...fields }),
+
+  info(msg: string, fields?: LogFields): void {
+    this.write('info', msg, fields)
+  }
+
+  error(msg: string, fields?: LogFields): void {
+    this.write('error', msg, fields)
+  }
+
+  child(fields: LogFields): Logger {
+    return new JsonLogger({ ...this.base, ...fields })
+  }
+
+  private write(level: string, msg: string, fields?: LogFields) {
+    const line = { ts: new Date().toISOString(), level, msg, ...this.base, ...fields }
+    process.stdout.write(`${JSON.stringify(line, errorReplacer)}\n`)
   }
 }
 

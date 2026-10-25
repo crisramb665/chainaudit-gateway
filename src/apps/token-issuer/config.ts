@@ -14,6 +14,7 @@ const configSchema = z.object({
 
 export type Config = z.infer<typeof configSchema>
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+/** Validates the environment. Called once, from main.ts; nothing else reads environment variables. */
+export function parseConfig(env: Record<string, string | undefined>): Config {
   return configSchema.parse(env)
 }

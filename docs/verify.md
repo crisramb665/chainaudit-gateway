@@ -22,6 +22,7 @@ pnpm --version              # 10.34.6
 pnpm install                # installs the pinned versions from pnpm-lock.yaml
 pnpm why jose               # a single version: jose 6.2.12
 pnpm typecheck              # no output, exit 0
+pnpm test                   # unit tests of the core services with fakes: 3 files, all passed (no services needed)
 ```
 
 ## 3. Infrastructure

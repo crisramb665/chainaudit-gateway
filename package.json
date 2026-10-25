@@ -19,7 +19,8 @@
     "issuer:dev": "node src/apps/token-issuer/main.ts",
     "hash-secret": "node scripts/hash-secret.ts",
     "gateway:dev": "node src/apps/gateway/main.ts",
-    "verify": "bash scripts/verify.sh"
+    "verify": "bash scripts/verify.sh",
+    "test": "vitest run"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
@@ -32,7 +33,9 @@
     "@types/express": "5.0.6",
     "@types/node": "24.19.1",
     "prettier": "3.9.10",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "vite": "8.3.4",
+    "vitest": "5.0.3"
   },
   "pnpm": {
     "overrides": {

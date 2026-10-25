@@ -4,10 +4,12 @@
 import { createPublicClient, createWalletClient, formatEther, http, parseEther } from 'viem'
 import { mnemonicToAccount } from 'viem/accounts'
 import { foundry } from 'viem/chains'
+import { z } from 'zod'
 
 // Anvil's public development mnemonic. These keys hold no real value.
 const MNEMONIC = 'test test test test test test test test test test test junk'
-const rpcUrl = process.env.RPC_URL ?? 'http://127.0.0.1:8545'
+// A script is its own tiny composition root: it reads and validates its env here, once.
+const { RPC_URL: rpcUrl } = z.object({ RPC_URL: z.url().default('http://127.0.0.1:8545') }).parse(process.env)
 
 const accounts = [0, 1, 2, 3, 4].map((addressIndex) => mnemonicToAccount(MNEMONIC, { addressIndex }))
 const transport = http(rpcUrl, { timeout: 5_000 })

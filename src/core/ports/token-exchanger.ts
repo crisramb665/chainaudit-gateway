@@ -11,6 +11,8 @@ export interface ExchangedToken {
   accessToken: string
   /** Seconds since epoch. */
   expiresAt: number
+  /** Set by the caching decorator, for logging. */
+  cache?: 'hit' | 'miss'
 }
 
 // LEARN: A port, because this hop differs per environment. Locally it is RFC

@@ -99,6 +99,7 @@ fi
 NODE_MAJOR=$(node -p 'process.versions.node.split(".")[0]')
 expect_eq "Node major version matches .nvmrc" "$(cat .nvmrc)" "$NODE_MAJOR"
 if pnpm -s typecheck >"$TMP/tsc" 2>&1; then pass "pnpm typecheck"; else fail "pnpm typecheck" "exit 0" "$(cat "$TMP/tsc")"; fi
+if pnpm -s test >"$TMP/test" 2>&1; then pass "pnpm test (core unit tests)"; else fail "pnpm test" "exit 0" "$(tail -20 "$TMP/test")"; fi
 
 # ---------- task 1: infrastructure ----------
 section "Task 1: local infrastructure"

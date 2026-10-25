@@ -22,7 +22,15 @@ Practice project to prepare a technical interview. The spec is `docs/rfc-001.md`
 
 - Ports and adapters. `src/core` holds domain logic and port interfaces and never imports AWS SDKs, HTTP frameworks or database drivers. Adapters live in `src/adapters/local` and `src/adapters/aws`. Runnable entry points live in `src/apps`.
 - Switching between local and AWS adapters is configuration, never code changes in `src/core`.
-- Handlers are plain functions that take an event and return a result, so the same handler runs behind Express locally and inside Lambda later.
+- Dependency injection by hand, no DI framework or container. Every adapter, service and HTTP handler is a class that receives its dependencies through the constructor, typed by an interface, never by a concrete class.
+- Driven ports (what core needs from outside: `TokenVerifier`, `BalanceReader`, `TokenExchanger`, `Clock`, …) are interfaces in `src/core/ports`. Service interfaces that apps call into core (`BalanceService`, `GatewayService`, `TokenIssuer`) live in `src/core` next to their `Default*` implementation. Add a port only where code would otherwise depend directly on a library or infrastructure.
+- Constructor arguments are long-lived dependencies; request-scoped values (principal, request logger, traceparent) are method arguments, never fields.
+- Nothing calls `new` on its own dependencies. Objects needed per request (MCP servers, transports) come from an injected factory. An adapter may build its own library client (viem, fetch, the MCP SDK client) from config values, since that client is its implementation.
+- No module-level singletons. `src/core` never imports adapters or apps, and no app imports another app (shared app code lives in `src/apps/shared`).
+- Each application has exactly one composition root, `src/apps/<app>/main.ts`. It is the only place that reads configuration, instantiates concrete adapters and wires the graph, in dependency order. Scripts in `scripts/` are their own small composition roots.
+- Configuration is parsed and validated once with zod (`parseConfig(process.env)` in `main.ts`) and passed down as narrow typed values. Nothing else reads `process.env`.
+- Handlers are classes whose dependencies come through the constructor. Their entry method takes an event and returns a result where the protocol allows it (the token endpoint does), so the same handler can run behind Express locally and inside Lambda later; the MCP handlers take Node req/res because the SDK transport needs them.
+- Core services are unit-tested with hand-written fakes of their ports (`pnpm test`); no mocking library, network or Docker.
 - `tenant_id` always comes from verified token claims, never from tool input or request bodies.
 - Every outbound call has an explicit timeout.
 - MCP server: Streamable HTTP in stateless mode, a new server and transport per request.
@@ -40,6 +48,7 @@ src/adapters/aws/        Cognito, DynamoDB, Secrets Manager, SQS
 src/apps/mcp-server/     MCP server entry point
 src/apps/gateway/        own gateway: auth, scopes, routing
 src/apps/token-issuer/   local OAuth issuer with JWKS
+src/apps/shared/         code shared by apps (bearer auth, MCP HTTP handler, trace ids)
 src/apps/workers/        ingestion and reconciliation workers
 scripts/                 seeding and helper scripts
 infra/                   docker compose and, later, Terraform
