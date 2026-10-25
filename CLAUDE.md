@@ -50,6 +50,7 @@ src/apps/mcp-server/     MCP server entry point
 src/apps/gateway/        own gateway: auth, scopes, routing
 src/apps/token-issuer/   local OAuth issuer with JWKS
 src/apps/shared/         code shared by apps (bearer auth, MCP HTTP handler, trace ids)
+src/apps/tenant-sample-server/  a tenant's own MCP server (third party, API key)
 src/apps/workers/        ingestion and reconciliation workers
 scripts/                 seeding and helper scripts
 infra/                   docker compose and, later, Terraform
