@@ -39,3 +39,9 @@ export function isToolVisible(principal: Principal, target: TargetConfig, tool: 
 export function missingScope(principal: Principal, scope: string): string | undefined {
   return principal.scopes.includes(scope) ? undefined : scope
 }
+
+/** The caller's scopes that this target uses: what a token for listing its tools needs, and no more. */
+export function scopesForTarget(principal: Principal, target: TargetConfig): string[] {
+  const used = new Set(Object.values(target.toolScopes))
+  return principal.scopes.filter((scope) => used.has(scope)).sort()
+}

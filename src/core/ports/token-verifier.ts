@@ -8,6 +8,8 @@ export interface Principal {
   tenantId: string
   scopes: string[]
   tokenId: string
+  /** RFC 8693 `act.sub`: the service acting on behalf of `subject`, if any. */
+  actor?: string
   /** Seconds since epoch. */
   expiresAt: number
 }

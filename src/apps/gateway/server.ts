@@ -5,12 +5,15 @@ import {
   type CallToolResult,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js'
+import type { CachingTokenExchanger } from '../../core/auth/caching-token-exchanger.ts'
+import { TokenExchangeError } from '../../core/errors.ts'
 import {
   isToolVisible,
   missingScope,
   namespacedName,
   parseNamespacedName,
   requiredScope,
+  scopesForTarget,
 } from '../../core/gateway/catalog.ts'
 import type { TargetConfig } from '../../core/gateway/targets.ts'
 import type { Logger } from '../../core/ports/logger.ts'
@@ -20,6 +23,11 @@ import { withTargetClient } from './target-client.ts'
 export interface GatewayServerDeps {
   // The verified caller. Tenant and scopes come only from here.
   principal: Principal
+  // LEARN: The caller's raw token is only ever sent to the issuer as the
+  // subject of a token exchange. Targets receive a new token minted for them;
+  // forwarding this one would make them accept tokens addressed to the gateway.
+  subjectToken: string
+  exchanger: CachingTokenExchanger
   targets: TargetConfig[]
   logger: Logger
   traceparent: string
@@ -30,18 +38,37 @@ export interface GatewayServerDeps {
 // Schemas already built; McpServer.registerTool expects zod schemas.
 export function buildGatewayServer(deps: GatewayServerDeps): Server {
   const server = new Server({ name: 'chainaudit-gateway', version: '0.1.0' }, { capabilities: { tools: {} } })
-  const callOptions = { traceparent: deps.traceparent, timeoutMs: deps.timeoutMs }
+
+  // A token for exactly this target and these scopes, on behalf of the caller.
+  const tokenFor = (target: TargetConfig, scopes: string[]) =>
+    deps.exchanger.exchange({
+      subjectToken: deps.subjectToken,
+      subjectTokenId: deps.principal.tokenId,
+      audience: target.audience,
+      scopes,
+    })
+  const callOptions = (accessToken: string) => ({
+    accessToken,
+    traceparent: deps.traceparent,
+    timeoutMs: deps.timeoutMs,
+  })
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     const perTarget = await Promise.allSettled(
-      deps.targets.map((target) =>
-        withTargetClient(target, callOptions, async (client, options) => {
+      deps.targets.map(async (target): Promise<Tool[]> => {
+        // The caller holds no scope this target uses: nothing would be visible,
+        // so the target is not called at all.
+        const scopes = scopesForTarget(deps.principal, target)
+        if (scopes.length === 0) return []
+        const token = await tokenFor(target, scopes)
+        deps.logger.info('target token', { target_id: target.id, exchange: token.cache, scope: scopes.join(' ') })
+        return withTargetClient(target, callOptions(token.accessToken), async (client, options) => {
           const { tools } = await client.listTools(undefined, options)
           return tools
             .filter((tool) => isToolVisible(deps.principal, target, tool.name))
             .map((tool): Tool => ({ ...tool, name: namespacedName(target.id, tool.name) }))
-        }),
-      ),
+        })
+      }),
     )
     // LEARN: A failing target drops out of the catalog instead of failing the
     // whole list, so one broken backend cannot hide every other target's tools.
@@ -68,11 +95,18 @@ export function buildGatewayServer(deps: GatewayServerDeps): Server {
     }
 
     try {
+      // Only the one scope this tool needs, even if the caller holds more.
+      const token = await tokenFor(target, [scope])
+      deps.logger.info('target token', { target_id: target.id, exchange: token.cache, scope })
       // The target's result, including its own isError results, passes through unchanged.
-      return (await withTargetClient(target, callOptions, (client, options) =>
+      return (await withTargetClient(target, callOptions(token.accessToken), (client, options) =>
         client.callTool({ name: parsed.tool, arguments: request.params.arguments ?? {} }, undefined, options),
       )) as CallToolResult
     } catch (err) {
+      if (err instanceof TokenExchangeError) {
+        deps.logger.error('token exchange failed', { target_id: target.id, tool: name, err })
+        return toolError(`Could not authorize the call to target ${target.id}`)
+      }
       deps.logger.error('target call failed', { target_id: target.id, tool: name, err })
       return toolError(`Target ${target.id} is unavailable`)
     }

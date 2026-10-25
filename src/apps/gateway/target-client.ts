@@ -3,6 +3,8 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import type { TargetConfig } from '../../core/gateway/targets.ts'
 
 export interface TargetCallOptions {
+  /** A token minted for this target by token exchange, never the caller's token. */
+  accessToken: string
   traceparent: string
   timeoutMs: number
 }
@@ -14,10 +16,9 @@ export async function withTargetClient<T>(
   fn: (client: Client, requestOptions: { timeout: number }) => Promise<T>,
 ): Promise<T> {
   const transport = new StreamableHTTPClientTransport(new URL(target.url), {
-    // TODO(task 4b): authenticate gateway -> target with a short-lived token
-    // minted for this target (RFC 8693 token exchange). Never forward the
-    // agent's token: the target would accept a token not addressed to it.
-    requestInit: { headers: { traceparent: options.traceparent } },
+    requestInit: {
+      headers: { Authorization: `Bearer ${options.accessToken}`, traceparent: options.traceparent },
+    },
     // LEARN: Two timeouts on purpose. The MCP request timeout (SDK default
     // 60 s) rejects the pending request, but does not close the socket. The
     // fetch-level AbortSignal does, so a hung target cannot hold connections.

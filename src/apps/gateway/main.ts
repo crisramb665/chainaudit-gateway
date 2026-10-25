@@ -4,7 +4,10 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import type { Request, Response } from 'express'
 import { createJoseTokenVerifier } from '../../adapters/local/jose-token-verifier.ts'
 import { createJsonLogger } from '../../adapters/local/json-logger.ts'
-import { authenticate, protectedResourceMetadata } from './auth.ts'
+import { createOAuthTokenExchanger } from '../../adapters/local/oauth-token-exchanger.ts'
+import { cachingTokenExchanger } from '../../core/auth/caching-token-exchanger.ts'
+import { authenticate } from '../shared/bearer-auth.ts'
+import { protectedResourceMetadata } from './resource-metadata.ts'
 import { loadConfig } from './config.ts'
 import { buildGatewayServer } from './server.ts'
 import { targets } from './targets.ts'
@@ -17,6 +20,15 @@ const verifier = createJoseTokenVerifier({
   issuer: config.ISSUER_URL,
   audience: config.TOKEN_AUDIENCE,
 })
+// One cache per process: exchanged tokens are reused across requests until shortly before expiry.
+const exchanger = cachingTokenExchanger(
+  createOAuthTokenExchanger({
+    tokenEndpoint: config.TOKEN_ENDPOINT,
+    clientId: config.GATEWAY_CLIENT_ID,
+    clientSecret: config.GATEWAY_CLIENT_SECRET,
+    timeoutMs: config.EXCHANGE_TIMEOUT_MS,
+  }),
+)
 
 const resource = `${config.GATEWAY_URL}/mcp`
 // RFC 9728 §3.1: the well-known segment goes between host and resource path.
@@ -57,11 +69,19 @@ app.post('/mcp', async (req: Request, res: Response) => {
     res.status(auth.status).set(auth.headers).json(auth.body)
     return
   }
-  const { principal } = auth
+  const { principal, token: subjectToken } = auth
   logger = logger.child({ tenant_id: principal.tenantId, sub: principal.subject })
 
   // Same stateless pattern as the MCP server: new server and transport per request.
-  const server = buildGatewayServer({ principal, targets, logger, traceparent, timeoutMs: config.TARGET_TIMEOUT_MS })
+  const server = buildGatewayServer({
+    principal,
+    subjectToken,
+    exchanger,
+    targets,
+    logger,
+    traceparent,
+    timeoutMs: config.TARGET_TIMEOUT_MS,
+  })
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
   res.on('close', () => {
     void transport.close()

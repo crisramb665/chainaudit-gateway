@@ -11,8 +11,18 @@ const configSchema = z
     // Above the target's own 2 s provider timeout, so the target can report
     // that timeout as a clear tool error before the gateway gives up.
     TARGET_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
+    // The gateway's own client at the issuer, used for token exchange.
+    GATEWAY_CLIENT_ID: z.string().min(1).default('chainaudit-gateway'),
+    // Local development secret only. In any shared environment it comes from a secret store.
+    GATEWAY_CLIENT_SECRET: z.string().min(1).default('gateway-local-secret'),
+    TOKEN_ENDPOINT: z.url().optional(),
+    EXCHANGE_TIMEOUT_MS: z.coerce.number().int().positive().default(2000),
   })
-  .transform((c) => ({ ...c, JWKS_URL: c.JWKS_URL ?? `${c.ISSUER_URL}/.well-known/jwks.json` }))
+  .transform((c) => ({
+    ...c,
+    JWKS_URL: c.JWKS_URL ?? `${c.ISSUER_URL}/.well-known/jwks.json`,
+    TOKEN_ENDPOINT: c.TOKEN_ENDPOINT ?? `${c.ISSUER_URL}/oauth2/token`,
+  }))
 
 export type Config = z.infer<typeof configSchema>
 

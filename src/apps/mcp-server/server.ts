@@ -3,13 +3,23 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 import { getBalance } from '../../core/balance/get-balance.ts'
 import { DomainError } from '../../core/errors.ts'
+import { missingScope } from '../../core/gateway/catalog.ts'
 import type { BalanceReader, HexAddress } from '../../core/ports/balance-reader.ts'
 import type { Logger } from '../../core/ports/logger.ts'
+import type { Principal } from '../../core/ports/token-verifier.ts'
 
 export interface McpServerDeps {
   balanceReader: BalanceReader
   logger: Logger
+  /** The verified caller of this request; the server is built per request. */
+  principal: Principal
 }
+
+// LEARN: This server owns its own policy instead of trusting the gateway's.
+// If a gateway bug lets a call through, or someone reaches this server with a
+// valid token by another path, the scope is still enforced here. Each hop
+// validates what it receives.
+const TOOL_SCOPES = { get_balance: 'chain:read' } as const
 
 export function buildMcpServer(deps: McpServerDeps): McpServer {
   const server = new McpServer({ name: 'chainaudit-mcp', version: '0.1.0' })
@@ -26,6 +36,11 @@ export function buildMcpServer(deps: McpServerDeps): McpServer {
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     async ({ address }): Promise<CallToolResult> => {
+      const missing = missingScope(deps.principal, TOOL_SCOPES.get_balance)
+      if (missing) {
+        deps.logger.info('tool call denied', { tool: 'get_balance', required_scope: missing })
+        return { isError: true, content: [{ type: 'text', text: `Tool get_balance requires scope ${missing}` }] }
+      }
       try {
         // The regex above guarantees the 0x-prefixed shape.
         const result = await getBalance(deps, { address: address as HexAddress })

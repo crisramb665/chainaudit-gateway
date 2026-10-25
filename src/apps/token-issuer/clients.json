@@ -3,14 +3,23 @@
     {
       "client_id": "agent-acme",
       "tenant_id": "acme",
+      "allowed_grant_types": ["client_credentials"],
       "allowed_scopes": ["chain:read", "recon:read", "recon:write"],
       "secret_hash": "scrypt$17$8$1$YvzK4uGlIAJ2zLg2--CerQ$0znhMeoOKLhkNhzaicgJvA0G3VfMf6tdfEAK4jP7cFs"
     },
     {
       "client_id": "agent-globex",
       "tenant_id": "globex",
+      "allowed_grant_types": ["client_credentials"],
       "allowed_scopes": ["chain:read"],
       "secret_hash": "scrypt$17$8$1$fXxQ3I8DgCknnxgWAC7Kfw$MZ3qfk2ftKcu4_nELq_ZvusYiBOXcFOvJcOLi4vRhbw"
+    },
+    {
+      "client_id": "chainaudit-gateway",
+      "allowed_grant_types": ["urn:ietf:params:oauth:grant-type:token-exchange"],
+      "subject_audience": "chainaudit-gateway",
+      "allowed_audiences": ["chainaudit-mcp"],
+      "secret_hash": "scrypt$17$8$1$BmJ08WJkcaVj956azBrDSg$l5WgnU-13M1B1BCy_i1iUwlfNbpjbLSC0Fpg06fj_6I"
     }
   ]
 }

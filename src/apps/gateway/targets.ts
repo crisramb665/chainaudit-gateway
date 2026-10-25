@@ -6,6 +6,7 @@ export const targets: TargetConfig[] = [
   {
     id: 'chain',
     url: 'http://127.0.0.1:3001/mcp',
+    audience: 'chainaudit-mcp',
     toolScopes: { get_balance: 'chain:read' },
   },
 ]

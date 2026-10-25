@@ -9,6 +9,7 @@ const claimsSchema = z.object({
   scope: z.string(),
   jti: z.string().min(1),
   exp: z.number(),
+  act: z.object({ sub: z.string().min(1) }).optional(),
 })
 
 export function createJoseTokenVerifier(options: { jwksUrl: string; issuer: string; audience: string }): TokenVerifier {
@@ -48,6 +49,7 @@ export function createJoseTokenVerifier(options: { jwksUrl: string; issuer: stri
           scopes: claims.data.scope.split(' ').filter(Boolean),
           tokenId: claims.data.jti,
           expiresAt: claims.data.exp,
+          ...(claims.data.act ? { actor: claims.data.act.sub } : {}),
         }
       } catch (err) {
         throw toDomainError(err)

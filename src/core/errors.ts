@@ -36,3 +36,10 @@ export class TokenVerifierUnavailableError extends DomainError {
     super('TOKEN_VERIFIER_UNAVAILABLE', 'Token verification is temporarily unavailable', options)
   }
 }
+
+/** A token for the next hop could not be obtained. */
+export class TokenExchangeError extends DomainError {
+  constructor(options?: ErrorOptions) {
+    super('TOKEN_EXCHANGE_FAILED', 'Could not obtain a token for the target', options)
+  }
+}
