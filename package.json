@@ -18,7 +18,8 @@
     "seed:anvil": "node scripts/seed-anvil.ts",
     "issuer:dev": "node src/apps/token-issuer/main.ts",
     "hash-secret": "node scripts/hash-secret.ts",
-    "gateway:dev": "node src/apps/gateway/main.ts"
+    "gateway:dev": "node src/apps/gateway/main.ts",
+    "verify": "bash scripts/verify.sh"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
