@@ -13,11 +13,13 @@
 
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
+    "erasableSyntaxOnly": true,
+    "rewriteRelativeImportExtensions": true,
     "skipLibCheck": true,
 
-    "rootDir": "src",
+    "rootDir": ".",
     "outDir": "dist",
     "sourceMap": true
   },
-  "include": ["src"]
+  "include": ["src", "scripts"]
 }

@@ -57,6 +57,13 @@ infra/                   docker compose and, later, Terraform
 | Jaeger UI | 16686 |
 | OpenTelemetry collector (OTLP over HTTP) | 4318 |
 
+## Comments
+
+This is a learning project. Add comments that explain the concept behind the code, not what the line does:
+why this pattern is used, what problem it prevents and what would break without it.
+Example: on a circuit breaker transition, explain why half open allows only a few probes.
+Mark these comments with `// LEARN:` so they can be found or removed later.
+
 ## Commands
 
 To be filled as the project grows.
