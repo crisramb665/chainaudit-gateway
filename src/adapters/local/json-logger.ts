@@ -12,6 +12,10 @@ export class JsonLogger implements Logger {
     this.write('info', msg, fields)
   }
 
+  warn(msg: string, fields?: LogFields): void {
+    this.write('warn', msg, fields)
+  }
+
   error(msg: string, fields?: LogFields): void {
     this.write('error', msg, fields)
   }

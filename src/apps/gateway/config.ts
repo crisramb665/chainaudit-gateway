@@ -24,6 +24,9 @@ const configSchema = z
     REGISTRY_CACHE_SECONDS: z.coerce.number().int().nonnegative().default(30),
     // Local stand-in for Secrets Manager.
     SECRETS_DIR: z.string().min(1).default('.secrets'),
+    // Production unless explicitly local: the safe default.
+    APP_ENV: z.enum(['local', 'production']).default('production'),
+    DNS_TIMEOUT_MS: z.coerce.number().int().positive().default(2000),
   })
   .transform((c) => ({
     ...c,
@@ -31,9 +34,19 @@ const configSchema = z
     TOKEN_ENDPOINT: c.TOKEN_ENDPOINT ?? `${c.ISSUER_URL}/oauth2/token`,
   }))
 
-export type Config = z.infer<typeof configSchema>
+const flagSchema = z.enum(['true', 'false']).default('false')
+
+export type Config = z.infer<typeof configSchema> & {
+  /** Tenant targets may live on loopback/private networks. Only ever true with APP_ENV=local. */
+  EGRESS_ALLOW_PRIVATE_NETWORKS: boolean
+}
 
 /** Validates the environment. Called once, from main.ts; nothing else reads environment variables. */
 export function parseConfig(env: Record<string, string | undefined>): Config {
-  return configSchema.parse(env)
+  const config = configSchema.parse(env)
+  // LEARN: The escape hatch for local development is not even read in
+  // production. A setting that could open the internal network must not be
+  // one forgotten environment variable away from doing so in a real deployment.
+  const allowPrivate = config.APP_ENV === 'local' && flagSchema.parse(env.EGRESS_ALLOW_PRIVATE_NETWORKS) === 'true'
+  return { ...config, EGRESS_ALLOW_PRIVATE_NETWORKS: allowPrivate }
 }

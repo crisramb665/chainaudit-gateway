@@ -3,7 +3,7 @@
 // this after every `pnpm infra:up`. Safe to run twice.
 // A script is its own tiny composition root: it reads and validates its env here, once.
 import { CreateTableCommand, DynamoDBClient, ResourceInUseException } from '@aws-sdk/client-dynamodb'
-import { DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb'
+import { DynamoDBDocumentClient, UpdateCommand } from '@aws-sdk/lib-dynamodb'
 import { z } from 'zod'
 
 const env = z
@@ -46,30 +46,23 @@ try {
 }
 
 const tenants = [
-  { tenant_id: 'acme', max_targets: 3, allowed_domains: ['localhost', '127.0.0.1'] },
-  { tenant_id: 'globex', max_targets: 1, allowed_domains: ['localhost', '127.0.0.1'] },
+  // Hostnames only: egress validation refuses IP literals, even locally.
+  { tenant_id: 'acme', max_targets: 3, allowed_domains: ['localhost'] },
+  { tenant_id: 'globex', max_targets: 1, allowed_domains: ['localhost'] },
 ]
 for (const tenant of tenants) {
-  // Only creates CONFIG if missing, so re-running never resets target_count.
-  await db
-    .send(
-      new PutCommand({
-        TableName: env.REGISTRY_TABLE,
-        Item: {
-          PK: `TENANT#${tenant.tenant_id}`,
-          SK: 'CONFIG',
-          max_targets: tenant.max_targets,
-          allowed_domains: tenant.allowed_domains,
-          target_count: 0,
-        },
-        ConditionExpression: 'attribute_not_exists(PK)',
-      }),
-    )
-    .then(
-      () => console.log(`CONFIG for ${tenant.tenant_id}: max_targets ${tenant.max_targets}`),
-      (err: unknown) => {
-        if ((err as { name?: string }).name !== 'ConditionalCheckFailedException') throw err
-        console.log(`CONFIG for ${tenant.tenant_id} already exists`)
-      },
-    )
+  // Creates CONFIG or refreshes its settings; target_count is only initialised,
+  // never reset, so re-running this keeps the quota counter correct.
+  await db.send(
+    new UpdateCommand({
+      TableName: env.REGISTRY_TABLE,
+      Key: { PK: `TENANT#${tenant.tenant_id}`, SK: 'CONFIG' },
+      UpdateExpression:
+        'SET max_targets = :max, allowed_domains = :domains, target_count = if_not_exists(target_count, :zero)',
+      ExpressionAttributeValues: { ':max': tenant.max_targets, ':domains': tenant.allowed_domains, ':zero': 0 },
+    }),
+  )
+  console.log(
+    `CONFIG for ${tenant.tenant_id}: max_targets ${tenant.max_targets}, allowed_domains ${tenant.allowed_domains.join(',')}`,
+  )
 }

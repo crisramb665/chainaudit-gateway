@@ -18,7 +18,7 @@
     "seed:anvil": "node scripts/seed-anvil.ts",
     "issuer:dev": "node src/apps/token-issuer/main.ts",
     "hash-secret": "node scripts/hash-secret.ts",
-    "gateway:dev": "node src/apps/gateway/main.ts",
+    "gateway:dev": "APP_ENV=local EGRESS_ALLOW_PRIVATE_NETWORKS=true node src/apps/gateway/main.ts",
     "verify": "bash scripts/verify.sh",
     "test": "vitest run",
     "tenant-sample:dev": "node src/apps/tenant-sample-server/main.ts",
@@ -30,6 +30,7 @@
     "@modelcontextprotocol/sdk": "1.32.1",
     "express": "5.3.0",
     "jose": "6.2.12",
+    "undici": "7.30.0",
     "viem": "2.57.4",
     "zod": "4.6.5"
   },

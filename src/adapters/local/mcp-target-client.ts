@@ -1,6 +1,9 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport, StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js'
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js'
+import type { LookupFunction } from 'node:net'
+import { Agent, fetch as undiciFetch } from 'undici'
 import { TargetCallError } from '../../core/errors.ts'
 import type {
   TargetCallContext,
@@ -49,7 +52,14 @@ export class McpTargetClient implements TargetClient {
     context: TargetCallContext,
     fn: (client: Client, requestOptions: { timeout: number }) => Promise<T>,
   ): Promise<T> {
-    // A per-call SDK client is this adapter's implementation, not an injected dependency.
+    // A per-call SDK client (and, for tenant targets, a per-call connection
+    // pool) is this adapter's implementation, not an injected dependency.
+    const pinned = context.connectTo ? pinnedAgent(context.connectTo) : undefined
+    const baseFetch: FetchLike = pinned
+      ? // undici's fetch and the global one share an implementation but not their
+        // type declarations, hence the casts at this boundary.
+        (url, init) => undiciFetch(url, { ...(init as object), dispatcher: pinned }) as unknown as Promise<Response>
+      : fetch
     const transport = new StreamableHTTPClientTransport(new URL(target.url), {
       requestInit: {
         headers: { ...credentialHeader(context.credential), traceparent: context.traceparent },
@@ -59,7 +69,7 @@ export class McpTargetClient implements TargetClient {
       // fetch-level AbortSignal does, so a hung target cannot hold connections.
       fetch: (url, init) => {
         const signal = AbortSignal.timeout(this.timeoutMs)
-        return fetch(url, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal })
+        return baseFetch(url, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal })
       },
     })
     const client = new Client({ name: 'chainaudit-gateway', version: '0.1.0' })
@@ -70,8 +80,29 @@ export class McpTargetClient implements TargetClient {
       throw toTargetCallError(err)
     } finally {
       await client.close().catch(() => {})
+      await pinned?.close().catch(() => {})
     }
   }
+}
+
+// LEARN: Pinning the connection to validated IPs. The URL keeps the real
+// hostname, so the Host header and TLS (SNI and the certificate check) still
+// use the name the tenant registered; only the DNS step is replaced, by a
+// lookup that can only answer with addresses egress validation approved. A
+// rebinding DNS server gets no second chance to answer with a private IP.
+function pinnedAgent(addresses: string[]): Agent {
+  // IPv4 first: if only one address is asked for, prefer the family every server listens on.
+  const entries = addresses
+    .map((address) => ({ address, family: address.includes(':') ? 6 : 4 }))
+    .sort((x, y) => x.family - y.family)
+  const lookup: LookupFunction = (_hostname, options, callback) => {
+    // Node asks for all addresses when it races IPv4 and IPv6 (happy eyeballs).
+    if (options.all) return callback(null, entries)
+    const first = entries[0]
+    if (!first) return callback(new Error('no validated address'), '', 0)
+    return callback(null, first.address, first.family)
+  }
+  return new Agent({ connect: { lookup } })
 }
 
 function credentialHeader(credential: TargetCredential): Record<string, string> {

@@ -8,7 +8,7 @@ Prerequisites: Docker Desktop running, `nvm`, and Node 24 (`.nvmrc`).
 
 ```bash
 docker compose -f infra/docker-compose.yml down -v   # stops containers and deletes the Postgres volume
-rm -rf .keys node_modules                            # issuer signing key (tokens signed with it become invalid) and deps
+rm -rf .keys .secrets node_modules                   # issuer signing key, tenant secrets and deps
 ```
 
 Expected: `Container chainaudit-… Removed` lines and `Volume chainaudit_pgdata Removed`.
@@ -34,6 +34,15 @@ pnpm infra:ps               # 5 services "running"; anvil and postgres show "(he
 
 If Anvil isn't healthy, run `docker compose -f infra/docker-compose.yml logs anvil`.
 
+Then create the tenant registry. DynamoDB Local is in memory too, so **run this after every `infra:up`**:
+
+```bash
+pnpm setup:dynamodb
+# table chainaudit-registry created   (or: already exists)
+# CONFIG for acme: max_targets 3, allowed_domains localhost
+# CONFIG for globex: max_targets 1, allowed_domains localhost
+```
+
 ## 4. Seed Anvil
 
 Anvil keeps its state in memory, so **run this again after every restart of the Anvil container**.
@@ -44,13 +53,17 @@ pnpm seed:anvil
 
 Expected: five lines like `#0 -> #1  1 ETH  block N  0x…`, then the balances. Account #1 (`0x7099…79C8`) ends up at about 9999.5 ETH.
 
-## 5. Start the three services (one terminal each, in this order)
+## 5. Start the four services (one terminal each, in this order)
 
 ```bash
-pnpm issuer:dev    # {"msg":"token issuer listening","port":3002,…,"kid":"…"}  (creates .keys/ on first run)
-pnpm mcp:dev       # {"msg":"mcp server listening","port":3001,…,"audience":"chainaudit-mcp"}
-pnpm gateway:dev   # {"msg":"gateway listening","port":3000,…,"targets":["chain"]}
+pnpm issuer:dev          # {"msg":"token issuer listening","port":3002,…,"kid":"…"}  (creates .keys/ on first run)
+pnpm mcp:dev             # {"msg":"mcp server listening","port":3001,…,"audience":"chainaudit-mcp"}
+pnpm tenant-sample:dev   # {"msg":"tenant sample server listening","port":3003}
+pnpm gateway:dev         # {"level":"warn","msg":"egress: private networks allowed for tenant targets (APP_ENV=local)",…}
+                         # {"msg":"gateway listening","port":3000,…,"targets":["chain"],"registry":"chainaudit-registry","app_env":"local"}
 ```
+
+`gateway:dev` sets `APP_ENV=local EGRESS_ALLOW_PRIVATE_NETWORKS=true`, so tenant targets on `localhost` are allowed; the warning says so.
 
 The issuer must be running before the first request to the gateway or the MCP server, because both fetch its JWKS.
 
@@ -73,6 +86,8 @@ What it covers:
 | Task 4b: exchange | Exchanged token (`aud`, `sub`, `tenant_id`, `act`, 5 min); `invalid_scope`; `invalid_target`; re-exchange refused; agents and the gateway limited to their own grant types |
 | Tasks 2 + 4b: MCP server | 401 without a token; the agent's token is refused (`unexpected audience`, so no passthrough); `tools/list`; balance as decimal strings; Anvil seeded; bad address gives `isError`; the server re-checks scope itself; `GET /mcp` gives 405 |
 | Task 4a: gateway | Protected resource metadata at both URLs; 401 with `resource_metadata`; tampered token; HS256 token rejected; a token for the MCP server is refused; namespaced and scope-filtered `tools/list`; a call routed through the gateway; missing scope; unknown tool; 405 |
+| Task 5a: registry | Table and acme CONFIG; register `notes` (active), idempotent repeat, 409 conflict, 403 without `registry:admin`, 400 for `tenant_id` in the body, pending with a reason for a wrong key and a dead URL, 429 at the quota; acme vs globex catalogs and calls; no `tenant:tools` refused; DynamoDB holds no key; secret file mode 600; sample server needs its key |
+| Task 5b: egress | 400 for an IP literal, decimal, hex, metadata IP, IPv6 literal, a domain outside the allowlist and userinfo; refused URLs are never stored |
 | Task 2: failures | 3 s Toxiproxy latency gives "Node provider timed out after 2000 ms" in about 2 s; proxy disabled gives "Node provider unavailable"; recovery afterwards |
 
 ## 6b. The same checks by hand
@@ -319,6 +334,51 @@ mcp localhost:3000/mcp "$A" "$(call chain__get_balance)"; echo
 
 If a fault check is interrupted, reset Toxiproxy with the `DELETE` and `{"enabled":true}` commands above.
 
+### Tasks 5a and 5b: tenant registry and egress
+
+```bash
+reg() { curl -s -w ' %{http_code}\n' localhost:3000/admin/targets \
+  -H "Authorization: Bearer $1" -H "$J" -d "$2"; }
+tgt() { printf '{"target_id":"%s","name":"%s","base_url":"%s","auth_type":"api_key","api_key":"%s"}' \
+  "$1" "${4:-Client notes}" "$2" "$3"; }
+names() { node -pe 'JSON.parse(require("fs").readFileSync(0)).result.tools.map(t => t.name).join(" ")'; }
+NOTE_CALL='{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"notes__get_client_note","arguments":{"client_name":"Northwind Ltd"}}}'
+ADMIN=$(tok acme-admin:acme-admin-local-secret | at)
+AT=$(tok agent-acme:acme-local-secret | at)
+G=$(tok agent-globex:globex-local-secret | at)
+
+# 5a.1 Register -> {…,"secret_ref":"/tenants/acme/targets/notes","status":"active","version":2,…} 201 (200 if it exists)
+reg "$ADMIN" "$(tgt notes http://localhost:3003/mcp acme-sample-key)"
+
+# 5a.2 Same again -> same body, 200 ; different name -> {"error":"conflict",…} 409
+reg "$ADMIN" "$(tgt notes http://localhost:3003/mcp acme-sample-key)"
+reg "$ADMIN" "$(tgt notes http://localhost:3003/mcp acme-sample-key 'Another name')"
+
+# 5a.3 Agent token -> {"error":"insufficient_scope",…} 403
+reg "$AT" "$(tgt notes http://localhost:3003/mcp acme-sample-key)"
+
+# 5a.4 Wrong key -> "status":"pending","status_reason":"health probe failed: rejected the credentials (HTTP 401)"
+reg "$ADMIN" "$(tgt notes2 http://localhost:3003/mcp wrong-key-123 'Bad key')"
+
+# 5a.5 Catalogs -> acme: "chain__get_balance notes__get_client_note" ; globex: "chain__get_balance"
+mcp localhost:3000/mcp "$AT" "$LIST" | sed -n '$p' | names
+mcp localhost:3000/mcp "$G" "$LIST" | sed -n '$p' | names
+
+# 5a.6 Calls -> acme: "structuredContent":{"client_name":"Northwind Ltd","note":"Holds treasury in a 2-of-3 multisig;…"}
+#              globex: "isError":true, "Unknown tool notes__get_client_note"
+mcp localhost:3000/mcp "$AT" "$NOTE_CALL" | sed -n '$p'; echo
+mcp localhost:3000/mcp "$G" "$NOTE_CALL" | sed -n '$p'; echo
+
+# 5b.1 Each -> 400 with the reason shown
+reg "$ADMIN" "$(tgt e1 http://127.0.0.1:3003/mcp k-123456)"          # base_url must use a hostname, not an IP address
+reg "$ADMIN" "$(tgt e2 http://2130706433:3003/mcp k-123456)"         # same (decimal is canonicalised to 127.0.0.1)
+reg "$ADMIN" "$(tgt e3 http://169.254.169.254/latest/ k-123456)"     # same (cloud metadata)
+reg "$ADMIN" "$(tgt e4 https://example.com/mcp k-123456)"            # host example.com is not in the tenant's allowed domains
+reg "$ADMIN" "$(tgt e5 http://user:pw@localhost:3003/mcp k-123456)"  # base_url must not contain credentials
+```
+
+The `mcp` helper prints headers too; `sed -n '$p'` keeps only the JSON body.
+
 ## 7. Manual checks (need logs or restarts)
 
 **a. Trace propagation (task 4a).** After `pnpm verify`, find the gateway's last `"msg":"mcp request"` line with `"tool":"chain__get_balance"` and copy its `trace_id`. The MCP server terminal shows `"mcp request"` lines with that same `trace_id`. There are several, because each gateway call does initialize plus the call.
@@ -346,6 +406,23 @@ Expected:
 **f. Jaeger UI (task 1).** Open http://localhost:16686. It loads. No traces are expected yet, because OpenTelemetry instrumentation comes in a later task.
 
 **g. MCP Inspector (task 2).** Run `npx @modelcontextprotocol/inspector`, choose Streamable HTTP, and enter `http://localhost:3000/mcp`. Paste a token from step 7b as the Bearer token (Inspector can't run the client credentials flow itself). Then list the tools and call `chain__get_balance`.
+
+**h. Calls are pinned to validated IPs (task 5b).** After `pnpm verify` (or 5a.6), the gateway terminal shows, before each tenant call, `{"msg":"egress validated","target_id":"notes","connect_to":["::1","127.0.0.1"],…}`, and no `egress validation failed` line. Those are the only addresses the call may connect to.
+
+**i. Production mode never allows private networks (task 5b).** Stop the gateway and start it in production mode, with the escape hatch set anyway:
+
+```bash
+APP_ENV=production EGRESS_ALLOW_PRIVATE_NETWORKS=true node src/apps/gateway/main.ts
+```
+
+- There's no `warn` line, and the listening line shows `"app_env":"production"`.
+- Registering `http://localhost:3003/mcp` returns `400` with `"base_url must use https"`.
+- Calling `notes__get_client_note` returns `isError` with `"Target notes failed egress validation"`, and the log shows the reason.
+
+Restart with `pnpm gateway:dev` afterwards.
+
+**j. Registry cache staleness (task 5a).** Within 30 s of the first acme `tools/list`, a target change in DynamoDB isn't visible to routing yet. After 30 s it is. That's the trade-off documented in `caching-target-reader.ts`.
+
 
 ## Stop everything
 

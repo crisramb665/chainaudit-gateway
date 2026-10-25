@@ -71,7 +71,7 @@ class StubSubjectVerifier implements JwtVerifier {
 }
 
 const fixedClock: Clock = { nowSeconds: () => NOW }
-const silentLogger: Logger = { info: () => {}, error: () => {}, child: () => silentLogger }
+const silentLogger: Logger = { info: () => {}, warn: () => {}, error: () => {}, child: () => silentLogger }
 const policy = { audience: 'chainaudit-gateway', ttlSeconds: 900, exchangeTtlSeconds: 300 }
 
 function build(subjectExpiresAt = NOW + 900) {

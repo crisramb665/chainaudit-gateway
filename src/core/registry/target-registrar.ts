@@ -1,3 +1,4 @@
+import type { EgressValidator } from '../egress/egress-validator.ts'
 import { TargetCallError } from '../errors.ts'
 import type { RequestContext } from '../gateway/gateway-service.ts'
 import type { Clock } from '../ports/clock.ts'
@@ -36,6 +37,7 @@ export class DefaultTargetRegistrar implements TargetRegistrar {
   private readonly registry: TenantRegistry
   private readonly credentials: CredentialProvider
   private readonly targetClient: TargetClient
+  private readonly egress: EgressValidator
   private readonly clock: Clock
   private readonly options: RegistrarOptions
 
@@ -43,12 +45,14 @@ export class DefaultTargetRegistrar implements TargetRegistrar {
     registry: TenantRegistry,
     credentials: CredentialProvider,
     targetClient: TargetClient,
+    egress: EgressValidator,
     clock: Clock,
     options: RegistrarOptions,
   ) {
     this.registry = registry
     this.credentials = credentials
     this.targetClient = targetClient
+    this.egress = egress
     this.clock = clock
     this.options = options
   }
@@ -65,10 +69,15 @@ export class DefaultTargetRegistrar implements TargetRegistrar {
     if (this.options.reservedTargetIds.includes(registration.targetId)) {
       return { kind: 'invalid', reason: `target_id ${registration.targetId} is reserved` }
     }
-    // TODO(task 5b): validate base_url before storing or probing it: HTTPS only,
-    // host on the tenant's allowed_domains, every resolved IP outside private,
-    // loopback and link-local ranges (including 169.254.169.254). Until then the
-    // gateway will call whatever URL a tenant admin registers (SSRF risk).
+    // Egress check before anything is stored or called: HTTPS, a hostname on
+    // the tenant's allowed domains, and only public addresses behind it.
+    const settings = await this.registry.getTenantSettings(tenantId)
+    if (!settings) return { kind: 'unknown_tenant' }
+    const egress = await this.egress.validate(registration.baseUrl, settings.allowedDomains)
+    if (!egress.ok) {
+      context.logger.info('target registration refused', { target_id: registration.targetId, reason: egress.reason })
+      return { kind: 'invalid', reason: egress.reason }
+    }
 
     const target: TenantTarget = {
       tenantId,
@@ -99,25 +108,31 @@ export class DefaultTargetRegistrar implements TargetRegistrar {
       if (existing.status !== 'pending') return { kind: 'existing', target: existing }
       // Still pending: the retry may carry a corrected key, so store it and probe again.
       await this.credentials.putSecret(caller, existing.secretRef, registration.apiKey)
-      return { kind: 'existing', target: await this.probe(existing, registration.apiKey, context) }
+      return { kind: 'existing', target: await this.probe(existing, registration.apiKey, egress.addresses, context) }
     }
 
     // The registry stores only secret_ref; the secret itself goes to the credential store.
     await this.credentials.putSecret(caller, target.secretRef, registration.apiKey)
     context.logger.info('target registered', { target_id: target.targetId, status: target.status })
-    return { kind: 'created', target: await this.probe(target, registration.apiKey, context) }
+    return { kind: 'created', target: await this.probe(target, registration.apiKey, egress.addresses, context) }
   }
 
   // LEARN: A target starts pending and only an end-to-end probe (initialize
   // plus tools/list, with the stored credential) makes it active. Routing only
   // uses active targets, so a typo in the URL or a wrong key never reaches agents.
-  private async probe(target: TenantTarget, apiKey: string, context: RequestContext): Promise<TenantTarget> {
+  private async probe(
+    target: TenantTarget,
+    apiKey: string,
+    connectTo: string[],
+    context: RequestContext,
+  ): Promise<TenantTarget> {
     let status: TargetStatus = 'active'
     let reason: string | undefined
     try {
       const tools = await this.targetClient.listTools(
         { id: target.targetId, url: target.baseUrl },
-        { credential: { kind: 'api_key', key: apiKey }, traceparent: context.traceparent },
+        // The probe connects only to the addresses that just passed validation.
+        { credential: { kind: 'api_key', key: apiKey }, traceparent: context.traceparent, connectTo },
       )
       context.logger.info('target probe passed', { target_id: target.targetId, tools: tools.length })
     } catch (err) {

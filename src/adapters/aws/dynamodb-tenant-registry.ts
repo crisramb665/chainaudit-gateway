@@ -10,6 +10,7 @@ import type {
   CreateTargetResult,
   TargetStatus,
   TenantRegistry,
+  TenantSettings,
   TenantTarget,
 } from '../../core/ports/tenant-registry.ts'
 
@@ -81,6 +82,17 @@ export class DynamoDbTenantRegistry implements TenantRegistry {
       startKey = page.LastEvaluatedKey
     } while (startKey)
     return items.filter((item) => item.status === 'active').map((item) => toTarget(tenantId, item))
+  }
+
+  async getTenantSettings(tenantId: string): Promise<TenantSettings | undefined> {
+    const { Item } = await this.db.send(
+      new GetCommand({ TableName: this.table, Key: { PK: tenantKey(tenantId), SK: CONFIG_KEY } }),
+    )
+    if (!Item) return undefined
+    return {
+      allowedDomains: (Item.allowed_domains as string[] | undefined) ?? [],
+      maxTargets: Item.max_targets as number,
+    }
   }
 
   async getTarget(tenantId: string, targetId: string): Promise<TenantTarget | undefined> {
@@ -182,10 +194,7 @@ export class DynamoDbTenantRegistry implements TenantRegistry {
   }
 
   private async tenantExists(tenantId: string): Promise<boolean> {
-    const { Item } = await this.db.send(
-      new GetCommand({ TableName: this.table, Key: { PK: tenantKey(tenantId), SK: CONFIG_KEY } }),
-    )
-    return Item !== undefined
+    return (await this.getTenantSettings(tenantId)) !== undefined
   }
 }
 

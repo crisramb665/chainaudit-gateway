@@ -26,6 +26,12 @@ export type TargetCredential = { kind: 'bearer'; token: string } | { kind: 'api_
 export interface TargetCallContext {
   credential: TargetCredential
   traceparent: string
+  /**
+   * Tenant targets only: the IPs egress validation approved for this call.
+   * The client must connect to one of these and nothing else, while keeping
+   * the URL's hostname for the Host header and TLS. Platform targets omit it.
+   */
+  connectTo?: string[]
 }
 
 /** Talks to a backend MCP server. Throws TargetCallError on transport errors and timeouts. */

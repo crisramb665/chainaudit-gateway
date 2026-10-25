@@ -6,8 +6,10 @@
 // gets an API key, never a token) without an issuer, DynamoDB, an MCP server
 // or any HTTP. Constructor injection is what makes that possible.
 import { describe, expect, it } from 'vitest'
+import { DefaultEgressValidator } from '../egress/egress-validator.ts'
 import { CredentialAccessDeniedError } from '../errors.ts'
 import type { CredentialProvider } from '../ports/credential-provider.ts'
+import type { DnsResolver } from '../ports/dns-resolver.ts'
 import type { Logger } from '../ports/logger.ts'
 import type {
   TargetCallContext,
@@ -16,7 +18,7 @@ import type {
   ToolDefinition,
   ToolResult,
 } from '../ports/target-client.ts'
-import type { TenantTarget, TenantTargetReader } from '../ports/tenant-registry.ts'
+import type { TenantSettings, TenantTarget, TenantTargetReader } from '../ports/tenant-registry.ts'
 import type { ExchangedToken, TokenExchanger, TokenExchangeRequest } from '../ports/token-exchanger.ts'
 import type { Principal } from '../ports/token-verifier.ts'
 import { DefaultGatewayService } from './gateway-service.ts'
@@ -33,7 +35,7 @@ const ACME_NOTES: TenantTarget = {
   tenantId: 'acme',
   targetId: 'notes',
   name: 'Client notes',
-  baseUrl: 'http://notes.invalid/mcp',
+  baseUrl: 'https://notes.example.com/mcp',
   authType: 'api_key',
   secretRef: '/tenants/acme/targets/notes',
   status: 'active',
@@ -77,6 +79,19 @@ class FakeTenantTargets implements TenantTargetReader {
     this.askedFor.push(tenantId)
     return tenantId === 'acme' ? [ACME_NOTES] : []
   }
+
+  async getTenantSettings(tenantId: string): Promise<TenantSettings | undefined> {
+    return { allowedDomains: tenantId === 'acme' ? ['example.com'] : [], maxTargets: 3 }
+  }
+}
+
+/** DNS under the test's control: `answer` can change between calls, like a rebinding attacker's server. */
+class FakeResolver implements DnsResolver {
+  answer = ['93.184.216.34']
+
+  async resolve(): Promise<string[]> {
+    return this.answer
+  }
 }
 
 /** Plays the credential store, including its tenant check. */
@@ -89,7 +104,7 @@ class FakeCredentials implements CredentialProvider {
   async putSecret(): Promise<void> {}
 }
 
-const silentLogger: Logger = { info: () => {}, error: () => {}, child: () => silentLogger }
+const silentLogger: Logger = { info: () => {}, warn: () => {}, error: () => {}, child: () => silentLogger }
 const context = { traceparent: '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01', logger: silentLogger }
 
 function caller(scopes: string[], tenantId = 'acme') {
@@ -101,8 +116,18 @@ function build(toolsByTarget: Record<string, ToolDefinition[]> = {}) {
   const exchanger = new FakeTokenExchanger()
   const targets = new FakeTargetClient(toolsByTarget)
   const tenantTargets = new FakeTenantTargets()
-  const gateway = new DefaultGatewayService(exchanger, targets, [PLATFORM], tenantTargets, new FakeCredentials())
-  return { gateway, exchanger, targets, tenantTargets }
+  const resolver = new FakeResolver()
+  // The real validator, with fake DNS.
+  const egress = new DefaultEgressValidator(resolver, { allowPrivateNetworks: false })
+  const gateway = new DefaultGatewayService(
+    exchanger,
+    targets,
+    [PLATFORM],
+    tenantTargets,
+    new FakeCredentials(),
+    egress,
+  )
+  return { gateway, exchanger, targets, tenantTargets, resolver }
 }
 
 describe('DefaultGatewayService (gateway core)', () => {
@@ -178,7 +203,12 @@ describe('DefaultGatewayService (gateway core)', () => {
       {
         target: 'notes',
         tool: 'get_client_note',
-        context: { credential: { kind: 'api_key', key: 'acme-sample-key' }, traceparent: context.traceparent },
+        context: {
+          credential: { kind: 'api_key', key: 'acme-sample-key' },
+          traceparent: context.traceparent,
+          // Pinned to the address that was just validated.
+          connectTo: ['93.184.216.34'],
+        },
       },
     ])
     expect(exchanger.requests).toEqual([])
@@ -194,6 +224,33 @@ describe('DefaultGatewayService (gateway core)', () => {
     expect(result).toEqual({
       isError: true,
       content: [{ type: 'text', text: 'Tool notes__get_client_note requires scope tenant:tools' }],
+    })
+    expect(targets.calls).toEqual([])
+  })
+
+  it('never validates or pins platform targets: they are operator config', async () => {
+    const { gateway, targets, resolver } = build()
+    resolver.answer = ['10.0.0.1'] // would fail validation if it were checked
+
+    await gateway.callTool(caller(['chain:read']), 'chain__get_balance', {}, context)
+
+    expect(targets.calls[0]?.target).toBe('chain')
+    expect(targets.calls[0]?.context.connectTo).toBeUndefined()
+  })
+
+  it('stops a DNS rebinding: the name now resolves to a private IP, so nothing is called', async () => {
+    const { gateway, targets, resolver } = build({ notes: [{ name: 'get_client_note' }] })
+    // Public when it was registered (and when the tools were listed) ...
+    const listed = await gateway.listTools(caller(['tenant:tools']), context)
+    expect(listed.map((t) => t.name)).toContain('notes__get_client_note')
+
+    // ... and the attacker's DNS answers with an internal address for the call.
+    resolver.answer = ['93.184.216.34', '10.0.0.5']
+    const result = await gateway.callTool(caller(['tenant:tools']), 'notes__get_client_note', {}, context)
+
+    expect(result).toEqual({
+      isError: true,
+      content: [{ type: 'text', text: 'Target notes failed egress validation' }],
     })
     expect(targets.calls).toEqual([])
   })

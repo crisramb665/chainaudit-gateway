@@ -4,12 +4,19 @@
 // the tenant's path and never into the registry, a retry is idempotent, and a
 // failed probe leaves the target pending with a reason.
 import { describe, expect, it } from 'vitest'
+import type { EgressResult, EgressValidator } from '../egress/egress-validator.ts'
 import { TargetCallError } from '../errors.ts'
 import type { Clock } from '../ports/clock.ts'
 import type { CredentialProvider } from '../ports/credential-provider.ts'
 import type { Logger } from '../ports/logger.ts'
 import type { TargetCallContext, TargetClient, TargetEndpoint, ToolDefinition } from '../ports/target-client.ts'
-import type { CreateTargetResult, TargetStatus, TenantRegistry, TenantTarget } from '../ports/tenant-registry.ts'
+import type {
+  CreateTargetResult,
+  TargetStatus,
+  TenantRegistry,
+  TenantSettings,
+  TenantTarget,
+} from '../ports/tenant-registry.ts'
 import type { Principal } from '../ports/token-verifier.ts'
 import { DefaultTargetRegistrar, type TargetRegistration } from './target-registrar.ts'
 
@@ -20,6 +27,10 @@ class InMemoryRegistry implements TenantRegistry {
 
   async listActiveTargets(tenantId: string): Promise<TenantTarget[]> {
     return [...this.items.values()].filter((t) => t.tenantId === tenantId && t.status === 'active')
+  }
+
+  async getTenantSettings(tenantId: string): Promise<TenantSettings | undefined> {
+    return tenantId === 'acme' ? { allowedDomains: ['localhost'], maxTargets: this.quota } : undefined
   }
 
   async getTarget(tenantId: string, targetId: string): Promise<TenantTarget | undefined> {
@@ -89,6 +100,18 @@ class FakeProbe implements TargetClient {
   }
 }
 
+/** Approves only the sample URL and records what it was asked. */
+class FakeEgress implements EgressValidator {
+  readonly asked: Array<{ url: string; domains: string[] }> = []
+
+  async validate(url: string, domains: string[]): Promise<EgressResult> {
+    this.asked.push({ url, domains })
+    return url === 'http://localhost:3003/mcp'
+      ? { ok: true, hostname: 'localhost', addresses: ['127.0.0.1'] }
+      : { ok: false, reason: 'base_url must use a hostname, not an IP address' }
+  }
+}
+
 const admin: Principal = {
   subject: 'acme-admin',
   tenantId: 'acme',
@@ -97,12 +120,12 @@ const admin: Principal = {
   expiresAt: 0,
 }
 const clock: Clock = { nowSeconds: () => 1_800_000_000 }
-const silentLogger: Logger = { info: () => {}, error: () => {}, child: () => silentLogger }
+const silentLogger: Logger = { info: () => {}, warn: () => {}, error: () => {}, child: () => silentLogger }
 const context = { traceparent: '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01', logger: silentLogger }
 const NOTES: TargetRegistration = {
   targetId: 'notes',
   name: 'Client notes',
-  baseUrl: 'http://127.0.0.1:3003/mcp',
+  baseUrl: 'http://localhost:3003/mcp',
   authType: 'api_key',
   apiKey: 'acme-sample-key',
 }
@@ -110,8 +133,11 @@ const NOTES: TargetRegistration = {
 function build(probe = new FakeProbe()) {
   const registry = new InMemoryRegistry()
   const credentials = new RecordingCredentials()
-  const registrar = new DefaultTargetRegistrar(registry, credentials, probe, clock, { reservedTargetIds: ['chain'] })
-  return { registrar, registry, credentials, probe }
+  const egress = new FakeEgress()
+  const registrar = new DefaultTargetRegistrar(registry, credentials, probe, egress, clock, {
+    reservedTargetIds: ['chain'],
+  })
+  return { registrar, registry, credentials, probe, egress }
 }
 
 describe('DefaultTargetRegistrar (gateway core)', () => {
@@ -128,6 +154,8 @@ describe('DefaultTargetRegistrar (gateway core)', () => {
       { tenant: 'acme', ref: '/tenants/acme/targets/notes', value: 'acme-sample-key' },
     ])
     expect(probe.probed[0]?.context.credential).toEqual({ kind: 'api_key', key: 'acme-sample-key' })
+    // The probe connects only to the address egress validation approved.
+    expect(probe.probed[0]?.context.connectTo).toEqual(['127.0.0.1'])
     // The registry item carries only the reference, never the secret.
     expect(JSON.stringify(outcome)).not.toContain('acme-sample-key')
   })
@@ -146,7 +174,7 @@ describe('DefaultTargetRegistrar (gateway core)', () => {
     const { registrar } = build()
     await registrar.register(admin, NOTES, context)
 
-    const outcome = await registrar.register(admin, { ...NOTES, baseUrl: 'http://elsewhere.invalid/mcp' }, context)
+    const outcome = await registrar.register(admin, { ...NOTES, name: 'Someone else' }, context)
 
     expect(outcome.kind).toBe('conflict')
   })
@@ -159,6 +187,18 @@ describe('DefaultTargetRegistrar (gateway core)', () => {
     await expect(registrar.register(admin, { ...NOTES, targetId: 'chain' }, context)).resolves.toMatchObject({
       kind: 'invalid',
     })
+  })
+
+  it("refuses a URL that fails egress validation, checked against the tenant's own allowed domains", async () => {
+    const { registrar, registry, credentials, probe, egress } = build()
+
+    const outcome = await registrar.register(admin, { ...NOTES, baseUrl: 'http://127.0.0.1:3003/mcp' }, context)
+
+    expect(outcome).toEqual({ kind: 'invalid', reason: 'base_url must use a hostname, not an IP address' })
+    expect(egress.asked).toEqual([{ url: 'http://127.0.0.1:3003/mcp', domains: ['localhost'] }])
+    expect(registry.items.size).toBe(0)
+    expect(credentials.written).toEqual([])
+    expect(probe.probed).toEqual([])
   })
 
   it('leaves the target pending with the reason when the probe fails', async () => {

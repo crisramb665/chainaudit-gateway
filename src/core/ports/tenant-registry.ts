@@ -16,6 +16,13 @@ export interface TenantTarget {
   createdAt: string
 }
 
+/** Tenant-wide settings from the CONFIG item. */
+export interface TenantSettings {
+  /** Hostnames (and their subdomains) the tenant may register targets on. */
+  allowedDomains: string[]
+  maxTargets: number
+}
+
 export type CreateTargetResult = 'created' | 'duplicate' | 'quota_exceeded' | 'unknown_tenant'
 
 // LEARN: Interface segregation. Routing only needs to read a tenant's active
@@ -24,6 +31,8 @@ export type CreateTargetResult = 'created' | 'duplicate' | 'quota_exceeded' | 'u
 export interface TenantTargetReader {
   /** The tenant's targets with status active. Always scoped to one tenant. */
   listActiveTargets(tenantId: string): Promise<TenantTarget[]>
+  /** Undefined when the tenant is not onboarded. Re-read at call time for egress checks. */
+  getTenantSettings(tenantId: string): Promise<TenantSettings | undefined>
 }
 
 export interface TenantRegistry extends TenantTargetReader {

@@ -1,3 +1,4 @@
+import type { EgressValidator } from '../egress/egress-validator.ts'
 import { TokenExchangeError } from '../errors.ts'
 import type { CredentialProvider } from '../ports/credential-provider.ts'
 import type { Logger } from '../ports/logger.ts'
@@ -44,6 +45,7 @@ export class DefaultGatewayService implements GatewayService {
   private readonly platformTargets: TargetConfig[]
   private readonly tenantTargets: TenantTargetReader
   private readonly credentials: CredentialProvider
+  private readonly egress: EgressValidator
 
   constructor(
     exchanger: TokenExchanger,
@@ -51,12 +53,17 @@ export class DefaultGatewayService implements GatewayService {
     platformTargets: TargetConfig[],
     tenantTargets: TenantTargetReader,
     credentials: CredentialProvider,
+    egress: EgressValidator,
   ) {
     this.exchanger = exchanger
     this.targetClient = targetClient
+    // LEARN: Platform targets come from operator config, reviewed and deployed
+    // like code, so they are trusted and skip egress validation. Tenant targets
+    // are user input and are validated on every single call.
     this.platformTargets = platformTargets
     this.tenantTargets = tenantTargets
     this.credentials = credentials
+    this.egress = egress
   }
 
   async listTools(caller: Caller, context: RequestContext): Promise<ToolDefinition[]> {
@@ -100,6 +107,9 @@ export class DefaultGatewayService implements GatewayService {
       return toolError(`Tool ${name} requires scope ${missing}`)
     }
 
+    const connectTo = await this.egressFor(caller, tenantTarget, context)
+    if (!connectTo) return toolError(`Target ${tenantTarget.targetId} failed egress validation`)
+
     let credential: TargetCredential
     try {
       credential = await this.tenantCredential(caller, tenantTarget)
@@ -110,7 +120,7 @@ export class DefaultGatewayService implements GatewayService {
     try {
       return await this.targetClient.callTool(
         { id: tenantTarget.targetId, url: tenantTarget.baseUrl },
-        { credential, traceparent: context.traceparent },
+        { credential, traceparent: context.traceparent, connectTo },
         parsed.tool,
         args,
       )
@@ -141,10 +151,12 @@ export class DefaultGatewayService implements GatewayService {
     target: TenantTarget,
     context: RequestContext,
   ): Promise<ToolDefinition[]> {
+    const connectTo = await this.egressFor(caller, target, context)
+    if (!connectTo) throw new Error(`target ${target.targetId} failed egress validation`)
     const credential = await this.tenantCredential(caller, target)
     const tools = await this.targetClient.listTools(
       { id: target.targetId, url: target.baseUrl },
-      { credential, traceparent: context.traceparent },
+      { credential, traceparent: context.traceparent, connectTo },
     )
     return tools.map((tool) => ({ ...tool, name: namespacedName(target.targetId, tool.name) }))
   }
@@ -203,6 +215,27 @@ export class DefaultGatewayService implements GatewayService {
   // platform as the agent (the confused deputy again, one hop further).
   private async tenantCredential(caller: Caller, target: TenantTarget): Promise<TargetCredential> {
     return { kind: 'api_key', key: await this.credentials.getSecret(caller.principal, target.secretRef) }
+  }
+
+  // LEARN: Validating again at call time, and handing the client the exact
+  // addresses we validated, is what defeats DNS rebinding. The tenant's DNS can
+  // answer a public IP at registration (or to our check) and a private one a
+  // second later; if the HTTP client resolved the name again on its own, the
+  // check and the connection could see different answers. Here they cannot.
+  /** The addresses this tenant target may be reached on right now, or undefined when it must not be called. */
+  private async egressFor(
+    caller: Caller,
+    target: TenantTarget,
+    context: RequestContext,
+  ): Promise<string[] | undefined> {
+    const settings = await this.tenantTargets.getTenantSettings(caller.principal.tenantId)
+    const result = await this.egress.validate(target.baseUrl, settings?.allowedDomains ?? [])
+    if (!result.ok) {
+      context.logger.error('egress validation failed', { target_id: target.targetId, reason: result.reason })
+      return undefined
+    }
+    context.logger.info('egress validated', { target_id: target.targetId, connect_to: result.addresses })
+    return result.addresses
   }
 
   /** The caller's tenant targets, when the caller may use them at all. */

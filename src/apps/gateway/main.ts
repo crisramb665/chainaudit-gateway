@@ -12,10 +12,12 @@ import { FileCredentialProvider } from '../../adapters/local/file-credential-pro
 import { JoseJwtVerifier } from '../../adapters/local/jose-jwt-verifier.ts'
 import { JsonLogger } from '../../adapters/local/json-logger.ts'
 import { McpTargetClient } from '../../adapters/local/mcp-target-client.ts'
+import { NodeDnsResolver } from '../../adapters/local/node-dns-resolver.ts'
 import { OAuthTokenExchanger } from '../../adapters/local/oauth-token-exchanger.ts'
 import { SystemClock } from '../../adapters/local/system-clock.ts'
 import { AudienceTokenVerifier } from '../../core/auth/audience-token-verifier.ts'
 import { CachingTokenExchanger } from '../../core/auth/caching-token-exchanger.ts'
+import { DefaultEgressValidator } from '../../core/egress/egress-validator.ts'
 import { TENANT_TOOLS_SCOPE } from '../../core/gateway/catalog.ts'
 import { DefaultGatewayService } from '../../core/gateway/gateway-service.ts'
 import { CachingTenantTargetReader } from '../../core/registry/caching-target-reader.ts'
@@ -59,19 +61,21 @@ const registry = new DynamoDbTenantRegistry({
   ...(config.DYNAMODB_ENDPOINT ? { endpoint: config.DYNAMODB_ENDPOINT } : {}),
 })
 const credentials = new FileCredentialProvider({ dir: config.SECRETS_DIR })
+const dnsResolver = new NodeDnsResolver({ timeoutMs: config.DNS_TIMEOUT_MS })
 
 // 3. Core services. The cache wraps the issuer exchanger and implements the
 // same port, so the gateway service cannot tell them apart. One cache per
 // process: exchanged tokens are reused across requests until shortly before expiry.
 const tokenVerifier = new AudienceTokenVerifier(jwtVerifier, config.TOKEN_AUDIENCE)
 const exchanger = new CachingTokenExchanger(issuerExchanger, clock, { refreshMarginSeconds: 30, maxEntries: 1000 })
+const egress = new DefaultEgressValidator(dnsResolver, { allowPrivateNetworks: config.EGRESS_ALLOW_PRIVATE_NETWORKS })
 // Routing reads tenant targets through a 30 s cache; registration writes go to the registry directly.
 const tenantTargets = new CachingTenantTargetReader(registry, clock, {
   ttlSeconds: config.REGISTRY_CACHE_SECONDS,
   maxTenants: 1000,
 })
-const gateway = new DefaultGatewayService(exchanger, targetClient, STATIC_TARGETS, tenantTargets, credentials)
-const registrar = new DefaultTargetRegistrar(registry, credentials, targetClient, clock, {
+const gateway = new DefaultGatewayService(exchanger, targetClient, STATIC_TARGETS, tenantTargets, credentials, egress)
+const registrar = new DefaultTargetRegistrar(registry, credentials, targetClient, egress, clock, {
   reservedTargetIds: STATIC_TARGETS.map((t) => t.id),
 })
 
@@ -107,6 +111,9 @@ app.listen(config.GATEWAY_PORT, HOST, (err?: Error) => {
     logger.error('gateway failed to start', { err })
     process.exit(1)
   }
+  if (config.EGRESS_ALLOW_PRIVATE_NETWORKS) {
+    logger.warn('egress: private networks allowed for tenant targets (APP_ENV=local)', { app_env: config.APP_ENV })
+  }
   logger.info('gateway listening', {
     host: HOST,
     port: config.GATEWAY_PORT,
@@ -114,5 +121,6 @@ app.listen(config.GATEWAY_PORT, HOST, (err?: Error) => {
     issuer: config.ISSUER_URL,
     targets: STATIC_TARGETS.map((t) => t.id),
     registry: config.REGISTRY_TABLE,
+    app_env: config.APP_ENV,
   })
 })

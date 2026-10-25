@@ -4,6 +4,10 @@
 # running. See docs/verify.md. This script never starts or stops services; it
 # only adds and removes a Toxiproxy toxic during the fault checks.
 #
+# Since task 5a it also needs `pnpm setup:dynamodb` (after infra:up) and the
+# tenant sample server (`pnpm tenant-sample:dev`). It registers tenant targets
+# for acme; re-running is safe because registration is idempotent.
+#
 # Usage: pnpm verify            (or: bash scripts/verify.sh)
 #        pnpm verify --no-faults (skip the Toxiproxy fault-injection checks)
 
@@ -88,7 +92,7 @@ text_of() { printf '%s' "$1" | js 'j.result.content[0].text'; }
 # ---------- preflight ----------
 section "Preflight"
 missing=0
-for svc in "Anvil:8545" "Toxiproxy:8474" "DynamoDB:8000" "Issuer:3002" "MCP server:3001" "Gateway:3000"; do
+for svc in "Anvil:8545" "Toxiproxy:8474" "DynamoDB:8000" "Issuer:3002" "MCP server:3001" "Gateway:3000" "Tenant sample server:3003"; do
   name=${svc%:*}; port=${svc##*:}
   if nc -z localhost "$port" 2>/dev/null; then pass "$name listening on $port"; else fail "$name listening on $port" "port open" "closed"; missing=1; fi
 done
@@ -225,6 +229,96 @@ expect_eq "unknown tool -> isError" "Unknown tool chain__nope" "$(text_of "$BODY
 req "$GATEWAY/mcp"
 expect_eq "GET /mcp -> 405" "405" "$STATUS"
 
+# ---------- task 5a: tenant registry ----------
+section "Task 5a: tenant registry and tenant targets"
+DDB_AUTH='AWS4-HMAC-SHA256 Credential=local/20260101/us-east-1/dynamodb/aws4_request, SignedHeaders=host, Signature=x'
+ddb() { # ddb <operation> <json>
+  curl -s -X POST localhost:8000 -H 'Content-Type: application/x-amz-json-1.0' \
+    -H "X-Amz-Target: DynamoDB_20120810.$1" -H "Authorization: $DDB_AUTH" -d "$2"
+}
+admin_post() { req "$GATEWAY/admin/targets" -H "Authorization: Bearer $1" -H 'Content-Type: application/json' -d "$2"; }
+target_body() { # target_body <id> <base_url> <api_key> [name]
+  printf '{"target_id":"%s","name":"%s","base_url":"%s","auth_type":"api_key","api_key":"%s"}' "$1" "${4:-Client notes}" "$2" "$3"
+}
+NOTE_CALL='{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"notes__get_client_note","arguments":{"client_name":"Northwind Ltd"}}}'
+
+ddb DescribeTable '{"TableName":"chainaudit-registry"}' >"$TMP/table"
+if [[ "$(js 'j.Table?.TableName' <"$TMP/table")" != "chainaudit-registry" ]]; then
+  fail "registry table exists" "chainaudit-registry" "missing (run pnpm setup:dynamodb)"
+  printf '\nRun pnpm setup:dynamodb, then pnpm verify again.\n'
+  exit 1
+fi
+pass "registry table chainaudit-registry exists"
+expect_eq "acme CONFIG allows only hostnames (localhost)" '["localhost"]' \
+  "$(ddb GetItem '{"TableName":"chainaudit-registry","Key":{"PK":{"S":"TENANT#acme"},"SK":{"S":"CONFIG"}}}' | js 'j.Item.allowed_domains.L.map(x => x.S)')"
+
+ADMIN=$(token acme-admin:acme-admin-local-secret)
+NOTES=$(target_body notes http://localhost:3003/mcp acme-sample-key)
+admin_post "$ADMIN" "$NOTES"
+expect_eq "register notes -> 201 (first run) or 200 (already there), status active" "ok active" \
+  "$([[ $STATUS == 201 || $STATUS == 200 ]] && echo ok || echo "$STATUS") $(printf '%s' "$BODY" | js 'j.status')"
+expect_eq "response carries secret_ref, never the key" "/tenants/acme/targets/notes false" \
+  "$(printf '%s' "$BODY" | js '`${j.secret_ref} ${JSON.stringify(j).includes("acme-sample-key")}`')"
+VERSION=$(printf '%s' "$BODY" | js 'j.version')
+admin_post "$ADMIN" "$NOTES"
+expect_eq "same registration again -> 200, same version (idempotent)" "200 $VERSION" "$STATUS $(printf '%s' "$BODY" | js 'j.version')"
+admin_post "$ADMIN" "$(target_body notes http://localhost:3003/mcp acme-sample-key 'Another name')"
+expect_eq "same id, different definition -> 409 conflict" "409 conflict" "$STATUS $(printf '%s' "$BODY" | js 'j.error')"
+AT=$(token agent-acme:acme-local-secret)
+admin_post "$AT" "$NOTES"
+expect_eq "agent token on the admin API -> 403" "403" "$STATUS"
+expect_has "403 names the missing scope" 'scope="registry:admin"' "$(header WWW-Authenticate)"
+admin_post "$ADMIN" "${NOTES/\{/{\"tenant_id\":\"globex\",}"
+expect_eq "tenant_id in the body -> 400" "400" "$STATUS"
+expect_has "400 says tenant_id is not accepted" "tenant_id" "$(printf '%s' "$BODY" | js 'j.error_description')"
+admin_post "$ADMIN" "$(target_body notes2 http://localhost:3003/mcp wrong-key-123 'Bad key')"
+expect_eq "wrong API key -> stays pending with the probe reason" \
+  "pending health probe failed: rejected the credentials (HTTP 401)" \
+  "$(printf '%s' "$BODY" | js '`${j.status} ${j.status_reason}`')"
+admin_post "$ADMIN" "$(target_body notes3 http://localhost:3999/mcp some-key-123 'Down')"
+expect_eq "unreachable target -> pending, connection refused" "pending health probe failed: connection refused" \
+  "$(printf '%s' "$BODY" | js '`${j.status} ${j.status_reason}`')"
+admin_post "$ADMIN" "$(target_body notes4 http://localhost:3003/mcp acme-sample-key 'One too many')"
+expect_eq "fourth target (acme max_targets 3) -> 429 quota_exceeded" "429 quota_exceeded" \
+  "$STATUS $(printf '%s' "$BODY" | js 'j.error')"
+
+rpc "$GATEWAY/mcp" "$AT" "$LIST"
+expect_has "acme catalog includes its own tenant tool" "notes__get_client_note" "$(printf '%s' "$BODY" | js 'j.result.tools.map(t => t.name).join(" ")')"
+rpc "$GATEWAY/mcp" "$G" "$LIST"
+expect_eq "globex catalog has no acme tools" '["chain__get_balance"]' "$(printf '%s' "$BODY" | js 'j.result.tools.map(t => t.name)')"
+rpc "$GATEWAY/mcp" "$AT" "$NOTE_CALL"
+expect_has "acme calls its tenant tool (API key, pinned connection)" "multisig" "$(printf '%s' "$BODY" | js 'j.result.structuredContent?.note')"
+rpc "$GATEWAY/mcp" "$G" "$NOTE_CALL"
+expect_eq "globex cannot call acme's target" "Unknown tool notes__get_client_note" "$(text_of "$BODY")"
+AT_CHAIN=$(token agent-acme:acme-local-secret chain:read)
+rpc "$GATEWAY/mcp" "$AT_CHAIN" "$NOTE_CALL"
+expect_eq "without tenant:tools -> refused" "Tool notes__get_client_note requires scope tenant:tools" "$(text_of "$BODY")"
+
+ddb Query '{"TableName":"chainaudit-registry","KeyConditionExpression":"PK = :pk","ExpressionAttributeValues":{":pk":{"S":"TENANT#acme"}}}' >"$TMP/acme"
+expect_eq "DynamoDB: CONFIG counts 3 targets" "3" "$(js 'j.Items.find(i => i.SK.S === "CONFIG").target_count.N' <"$TMP/acme")"
+expect_eq "DynamoDB holds secret_ref only, never an API key" "false" "$(js 'JSON.stringify(j).includes("acme-sample-key")' <"$TMP/acme")"
+SECRET_FILE=.secrets/tenants/acme/targets/notes
+expect_eq "secret file exists with mode 600" "600" \
+  "$(node -p "(require('fs').statSync('$SECRET_FILE').mode & 0o777).toString(8)" 2>/dev/null)"
+req http://localhost:3003/mcp -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d "$LIST"
+expect_eq "sample tenant server refuses calls without the key -> 401" "401" "$STATUS"
+
+# ---------- task 5b: egress validation ----------
+section "Task 5b: egress validation (SSRF, DNS rebinding)"
+egress_case() { # egress_case <id> <url> <expected reason>
+  admin_post "$ADMIN" "$(target_body "$1" "$2" some-key-123 'Egress test')"
+  expect_eq "$2 -> 400" "400 $3" "$STATUS $(printf '%s' "$BODY" | js 'j.error_description')"
+}
+egress_case egress-ip 'http://127.0.0.1:3003/mcp' 'base_url must use a hostname, not an IP address'
+egress_case egress-decimal 'http://2130706433:3003/mcp' 'base_url must use a hostname, not an IP address'
+egress_case egress-hex 'http://0x7f.0.0.1:3003/mcp' 'base_url must use a hostname, not an IP address'
+egress_case egress-metadata 'http://169.254.169.254/latest/meta-data/' 'base_url must use a hostname, not an IP address'
+egress_case egress-ipv6 'http://[::1]:3003/mcp' 'base_url must use a hostname, not an IP address'
+egress_case egress-domain 'https://example.com/mcp' "host example.com is not in the tenant's allowed domains"
+egress_case egress-userinfo 'http://user:pw@localhost:3003/mcp' 'base_url must not contain credentials'
+ddb GetItem '{"TableName":"chainaudit-registry","Key":{"PK":{"S":"TENANT#acme"},"SK":{"S":"TARGET#egress-ip"}}}' >"$TMP/egress"
+expect_eq "refused URLs are never stored" "undefined" "$(js 'j.Item' <"$TMP/egress")"
+
 # ---------- task 2: failure containment ----------
 if [[ $RUN_FAULTS == 1 ]]; then
   section "Task 2: timeouts and provider failures (Toxiproxy)"
@@ -243,5 +337,5 @@ fi
 
 # ---------- summary ----------
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
-printf 'Manual checks (logs, restarts) are listed in docs/verify.md, step 7.\n'
+printf 'Manual checks (logs, restarts, production mode) are listed in docs/verify.md, step 7.\n'
 [[ $FAIL == 0 ]]
