@@ -15,11 +15,14 @@
     "infra:down": "docker compose -f infra/docker-compose.yml down",
     "infra:ps": "docker compose -f infra/docker-compose.yml ps",
     "mcp:dev": "node src/apps/mcp-server/main.ts",
-    "seed:anvil": "node scripts/seed-anvil.ts"
+    "seed:anvil": "node scripts/seed-anvil.ts",
+    "issuer:dev": "node src/apps/token-issuer/main.ts",
+    "hash-secret": "node scripts/hash-secret.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
     "express": "5.3.0",
+    "jose": "6.2.12",
     "viem": "2.57.4",
     "zod": "4.6.5"
   },
@@ -28,5 +31,10 @@
     "@types/node": "24.19.1",
     "prettier": "3.9.10",
     "typescript": "5.9.3"
+  },
+  "pnpm": {
+    "overrides": {
+      "jose": "6.2.12"
+    }
   }
 }

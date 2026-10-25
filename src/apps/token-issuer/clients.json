@@ -1,0 +1,16 @@
+{
+  "clients": [
+    {
+      "client_id": "agent-acme",
+      "tenant_id": "acme",
+      "allowed_scopes": ["chain:read", "recon:read", "recon:write"],
+      "secret_hash": "scrypt$17$8$1$YvzK4uGlIAJ2zLg2--CerQ$0znhMeoOKLhkNhzaicgJvA0G3VfMf6tdfEAK4jP7cFs"
+    },
+    {
+      "client_id": "agent-globex",
+      "tenant_id": "globex",
+      "allowed_scopes": ["chain:read"],
+      "secret_hash": "scrypt$17$8$1$fXxQ3I8DgCknnxgWAC7Kfw$MZ3qfk2ftKcu4_nELq_ZvusYiBOXcFOvJcOLi4vRhbw"
+    }
+  ]
+}
