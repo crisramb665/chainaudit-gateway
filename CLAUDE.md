@@ -10,6 +10,7 @@ Practice project to prepare a technical interview. The spec is `docs/rfc-001.md`
 4. Never add a dependency without telling me its name, exact version and why. Pin exact versions, and pick versions published at least two weeks ago.
 5. Keep changes small and suggest a commit message at the end of each task.
 6. Do not write code for tasks that are not the current one, even if it seems convenient.
+7. At the end of each task, list which parts of docs/rfc-001.md the task affected: open questions it answered, assumptions it proved wrong. Propose the exact text for each change and wait for my approval before editing the RFC. Never edit files in docs/diagrams/; they are snapshots.
 
 ## Stack
 
