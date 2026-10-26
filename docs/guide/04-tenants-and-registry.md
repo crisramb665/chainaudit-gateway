@@ -1,10 +1,12 @@
 # 04 · Tenants and the target registry
 
 > **Status**
+>
 > - **BUILT**: tenant from token, DynamoDB single-table registry (Local), admin registration API, health probe, credential store (local files), egress validation with DNS pinning, tenant-scoped routing, 30 s registry cache.
 > - **DESIGN ONLY**: Secrets Manager with IAM ABAC, `dynamodb:LeadingKeys` IAM condition, per-tenant request quotas.
 
 Acronyms used here:
+
 - **MCP**: Model Context Protocol.
 - **ABAC**: Attribute Based Access Control.
 - **IAM**: Identity and Access Management.
@@ -19,6 +21,7 @@ Acronyms used here:
 **Analogy.** In an office building, your floor is printed on your badge by reception. You can't just tell the elevator which floor you work on.
 
 **Technical.** The only source of `tenant_id` is the verified token: `Principal.tenantId`, set in `JoseJwtVerifier`.
+
 - Tool arguments never carry it.
 - The admin API rejects a body containing `tenant_id` (zod `.strict()`).
 - Every registry read, credential read and breaker key uses `principal.tenantId`.
@@ -53,6 +56,7 @@ flowchart LR
 | Status change | `Update TARGET#id` if `version = :expected`, then `version + 1` | `updateTargetStatus` |
 
 **Why Query, never Scan.**
+
 - A Query names one partition, the caller's tenant, so it's cheap and can't return another tenant's rows.
 - A Scan reads the whole table, every tenant, and filters afterwards. It's slower, more expensive, and one forgotten filter away from a data leak.
 - With the tenant in the key, there's simply no code path that lists across tenants.
@@ -107,6 +111,7 @@ Code: `register-target-handler.ts` → `DefaultTargetRegistrar.register` / `prob
 **Analogy.** Each customer's spare key in a locked box labelled with their name. The concierge may only open the box whose label matches the badge of the person asking.
 
 **Technical.**
+
 - `FileCredentialProvider` keeps one file per secret at `.secrets/tenants/<tenant>/targets/<target>` (directory 0700, file 0600, `.secrets/` gitignored).
 - The registry stores only `secret_ref` (`/tenants/acme/targets/notes`), never the key.
 - Every read or write passes the caller's verified `Principal`. If the ref's tenant segment doesn't match `principal.tenantId`, the adapter throws `CredentialAccessDeniedError`.
@@ -119,6 +124,7 @@ Code: `register-target-handler.ts` → `DefaultTargetRegistrar.register` / `prob
 **Analogy.** Before the courier leaves, a dispatcher checks that the address is in the customer's approved list and not inside our own building. The courier then drives to the exact address the dispatcher checked, not to wherever the street sign points later.
 
 **Technical.** `DefaultEgressValidator.validate(url, allowedDomains)` runs at registration and again before **every** tenant call:
+
 1. It must be a valid URL with no `user:pass@` in it.
 2. It must use `https:`. Exception, in local mode only (`APP_ENV=local` + `EGRESS_ALLOW_PRIVATE_NETWORKS=true`): `http:` when every address is loopback or private.
 3. **No IP literal as the host.** The WHATWG URL parser canonicalises `2130706433`, `0177.0.0.1` and `0x7f.0.0.1` to `127.0.0.1` first, so every spelling is caught.
@@ -155,7 +161,7 @@ flowchart TD
 | Egress validation | No | Every registration and every call |
 | Timeout | 5 s | 2 s |
 | Visible to | Every tenant with the scope | Only its own tenant |
-| Breaker key | `tenant|chain` | `tenant|target_id` |
+| Breaker key | `tenant | chain` | `tenant | target_id` |
 
 A tenant target id can't reuse a platform id (`chain` is reserved), so `chain__x` is never ambiguous.
 
@@ -164,12 +170,14 @@ A tenant target id can't reuse a platform id (`chain` is reserved), so `chain__x
 ## 7. The registry cache
 
 The gateway reads a tenant's targets and settings through `CachingTenantTargetReader` (30 s).
+
 - **Benefit:** no DynamoDB read on most requests.
 - **Cost:** a target disabled in DynamoDB stays callable for up to 30 s on each gateway instance, and a new one appears up to 30 s late.
 
 DNS and credentials are deliberately **not** cached: rebinding protection needs fresh DNS, and a rotated key should apply on the next call.
 
 ## Code vs. RFC
+
 - **Credentials.** The RFC uses Secrets Manager with the ARN in DynamoDB and IAM ABAC; the code uses local files with a path and a code-level check.
 - **Local HTTP.** The RFC says HTTPS only; local mode allows `http` for loopback and private addresses.
 - **Blocked ranges.** The code blocks more ranges than the RFC lists: CGNAT, NAT64, 6to4, Teredo, multicast, reserved and IPv4-mapped.
@@ -178,3 +186,5 @@ DNS and credentials are deliberately **not** cached: rebinding protection needs 
 - **Probe and status.** The probe has no automatic retry, and there's no disable API (the status exists).
 - **Quotas.** Only max targets is implemented (already recorded in the RFC's "What changed").
 - **Who manages allowed domains.** Only `setup:dynamodb`; there's no API for them.
+
+**Detailed flows with names:** [`docs/diagrams/03-end-to-end-flows.md`](../diagrams/03-end-to-end-flows.md): flow 9 (tenant target call), flow 10 (registration, every outcome), flow 11 (registry item life), flow 12 (isolation scenarios), flow 13 (DNS rebinding attack).

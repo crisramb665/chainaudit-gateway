@@ -45,6 +45,7 @@ flowchart LR
 **Analogy.** The badge office at a building entrance: it checks your ID and gives you a dated visitor badge.
 
 **Job.** It issues OAuth 2.0 access tokens, as JWTs signed with ES256:
+
 - **client credentials**, for agents and tenant admins;
 - **token exchange** (RFC 8693), only for the gateway client.
 
@@ -56,6 +57,7 @@ It also publishes its public key.
 | `GET /.well-known/jwks.json` | — | `{keys: [{kty: EC, crv: P-256, x, y, kid, alg: ES256, use: sig}]}` |
 
 **Key files.**
+
 - `main.ts`: composition root.
 - `token-endpoint-handler.ts`: Basic parsing, status mapping.
 - `src/core/issuer/token-issuer.ts`: the grants.
@@ -63,6 +65,7 @@ It also publishes its public key.
 - `src/adapters/local/file-signing-key-store.ts`: key in `.keys/`, mode 0600.
 
 **When it fails.**
+
 - New tokens can't be issued, and token exchange fails, so calls to platform targets return "Could not authorize the call to target chain".
 - If the gateway or MCP server haven't cached the keys yet, they return **503** `temporarily_unavailable`; already cached keys keep working.
 
@@ -75,6 +78,7 @@ It also publishes its public key.
 **Analogy.** A hotel concierge: it checks your room key, knows which services you're entitled to, calls them for you with the hotel's own arrangements, and stops calling a broken one.
 
 **Job.**
+
 - MCP server towards agents and MCP client towards targets;
 - inbound JWT auth and scope checks;
 - merged, filtered tool catalog;
@@ -92,6 +96,7 @@ It also publishes its public key.
 | `POST /admin/targets` | Bearer token with `registry:admin`, JSON `{target_id, name, base_url, auth_type: api_key, api_key}` | 201/200 target view, 400, 403, 404, 409, 429 |
 
 **Key files.**
+
 - `main.ts`, `config.ts`, `targets.ts` (`STATIC_TARGETS`), `gateway-server-factory.ts`, `register-target-handler.ts`, `resource-metadata.ts`.
 - Core: `gateway/gateway-service.ts`, `registry/*`, `egress/*`, `resilience/*`.
 
@@ -133,6 +138,7 @@ It also publishes its public key.
 **Key files.** `main.ts`, `notes-http-handler.ts`, `api-key-guard.ts`, `client-notes-server-factory.ts`.
 
 **When it fails.**
+
 - Registration leaves the target `pending` with a reason.
 - Calls return `Target notes is unavailable`.
 - Repeated failures open the `acme|notes` breaker, after which calls return `…(circuit open)` immediately.
@@ -159,6 +165,7 @@ It also publishes its public key.
 **Analogy.** A plumber's valve you can partly close to simulate a clogged pipe.
 
 **Job.** A TCP proxy with injectable faults ("toxics"), configured by `infra/toxiproxy/toxiproxy.json`:
+
 - `anvil`: `0.0.0.0:18545` → `anvil:8545`;
 - `acme-notes`: `0.0.0.0:13003` → `host.docker.internal:3003`.
 
@@ -175,11 +182,13 @@ It also publishes its public key.
 **Analogy.** A filing cabinet with one locked drawer per customer.
 
 **Job.**
+
 - It holds the tenant registry: table `chainaudit-registry`, `PK=TENANT#<id>`, `SK=CONFIG | TARGET#<id>`.
 - It runs with `-sharedDb -inMemory`, so data disappears on restart.
 - `pnpm setup:dynamodb` creates the table and the acme and globex `CONFIG` items.
 
 **When it fails.**
+
 - Registration fails, with a 500 from the admin API.
 - For tenants with no cached registry entry, tenant tools disappear from `tools/list`, calls to them answer `Unknown tool …`, and the gateway logs `tenant targets unavailable`. Entries already cached keep working for up to 30 s.
 - Platform targets are unaffected.
@@ -209,3 +218,5 @@ It also publishes its public key.
 **When it fails.** Nothing in the apps notices.
 
 **Real-world replacement.** AWS X-Ray and CloudWatch, fed by the AWS Distro for OpenTelemetry. Logs go to CloudWatch Logs.
+
+**Detailed flows with names:** [`docs/diagrams/03-end-to-end-flows.md`](../diagrams/03-end-to-end-flows.md): flow 2 (startup and wiring), flow 3 (Caseware onboards a tenant).

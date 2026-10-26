@@ -160,3 +160,5 @@ Toxiproxy has two proxies: `anvil` (:18545 â†’ Anvil) and `acme-notes` (:13003 â
 - **Tenants are walled off by key design,** not by remembering to filter: every registry read names the tenant from the token (chapter 04).
 - **A broken target costs only its own tenant** a fast, clear error (chapter 05).
 - **Local first.** Every piece runs on a laptop, so the concepts are learned before a managed service hides them. AWS comes last (chapter 06).
+
+**Detailed flows with names:** [`docs/diagrams/03-end-to-end-flows.md`](../diagrams/03-end-to-end-flows.md): flow 1 (who's who and where everything runs), flow 16 (Northwind's reconciliation, design only).

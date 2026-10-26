@@ -109,6 +109,7 @@ sequenceDiagram
 ```
 
 Where each part lives:
+
 - **Entry:** `McpHttpHandler.handle` (`src/apps/shared/mcp-http-handler.ts`) → `GatewayServerFactory.create` → `DefaultGatewayService.callTool` (`src/core/gateway/gateway-service.ts`).
 - **Registry lookup:**
   - `tenantTargetsOf` → `CachingTenantTargetReader.listActiveTargets` (`src/core/registry/caching-target-reader.ts`);
@@ -166,6 +167,7 @@ sequenceDiagram
 ```
 
 Where each part lives:
+
 - **Token:** `DefaultTokenIssuer.clientCredentials` (`src/core/issuer/token-issuer.ts`), with client `acme-admin` in `src/apps/token-issuer/clients.json`.
 - **Admin route:** `POST /admin/targets` in `src/apps/gateway/main.ts` → `RegisterTargetHandler.handle` (`src/apps/gateway/register-target-handler.ts`: `missingScope(..., 'registry:admin')`, `bodySchema.strict()`, `toHttp`, `view`).
 - **Logic:** `DefaultTargetRegistrar.register` and `probe` (`src/core/registry/target-registrar.ts`).

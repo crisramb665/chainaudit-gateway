@@ -3,6 +3,7 @@
 > Every shortcut, simplification and code-vs-RFC difference in one place, with what a production version would need. "RFC" means `docs/rfc-001.md`. Items already recorded in the RFC's "What changed after building" are marked *(in RFC)*.
 
 Acronyms used here:
+
 - **IAM**: Identity and Access Management.
 - **ABAC**: Attribute Based Access Control.
 - **SLO**: Service Level Objective.
@@ -46,6 +47,7 @@ Acronyms used here:
 | Registry cache | 30 s TTL, no invalidation across instances | Shorter TTL or explicit invalidation for kill switches |
 
 ## Differences from the RFC that are deliberate additions
+
 - **Stricter token verification.** The algorithm is pinned (ES256), `typ: at+jwt` is required, and so are a set of claims.
 - **Stricter token exchange.** Only the subject token's audience may exchange it, an `act` claim is added, re-exchange is refused, and the new `exp` is capped at the subject's.
 - **More blocked ranges.** IP literals in any notation, CGNAT, NAT64, 6to4, Teredo, multicast, reserved and IPv4-mapped IPv6 are all blocked.
@@ -56,6 +58,7 @@ Acronyms used here:
 - **The SQL lab writes idempotent job creation as a single CTE statement,** where the RFC uses `BEGIN … COMMIT`. Both are atomic.
 
 ## Engineering hygiene gaps
+
 - **Recent transitive dependencies.** Some packages pulled in by the direct dependencies (e.g. `@aws-sdk/*`, `@smithy/*`) are newer than two weeks. A pnpm `minimumReleaseAge` setting was proposed, not applied.
 - **No CI.** Checks run by hand (`pnpm verify`).
 - **Docker Desktop dependency.** `host.docker.internal` reaching services that listen on the host's 127.0.0.1 works on your Mac. On Linux the compose file adds `host-gateway`, but this hasn't been tested there.

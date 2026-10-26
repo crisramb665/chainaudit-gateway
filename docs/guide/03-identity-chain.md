@@ -1,10 +1,12 @@
 # 03 · The identity chain
 
 > **Status**
+>
 > - **BUILT** locally: client credentials, JWT verification (JWKS), scope checks at the gateway and at the MCP server, RFC 8693 token exchange with an `act` claim, exchanged-token cache.
 > - **DESIGN ONLY**: Cognito as the issuer, AgentCore Gateway's inbound authorizer, AgentCore Identity outbound auth, SigV4/STS for AWS backends.
 
 Acronyms used here:
+
 - **JWT**: JSON Web Token.
 - **JWKS**: JSON Web Key Set.
 - **MCP**: Model Context Protocol.
@@ -16,6 +18,7 @@ Acronyms used here:
 **Analogy.** A visitor badge printed at reception, with your name, your company, the rooms you may enter, the building it's valid in, and an expiry time. The badge is stamped with a seal that only reception owns.
 
 **Technical.**
+
 - The agent POSTs `grant_type=client_credentials` to `/oauth2/token` with HTTP Basic auth.
 - `DefaultTokenIssuer` looks up the client in `clients.json` and verifies the secret with scrypt. For an unknown client id it does the same amount of work, so timing reveals nothing.
 - It resolves the scopes: the requested ones must be allowed, and if none are requested it grants all the allowed ones.
@@ -24,6 +27,7 @@ Acronyms used here:
 The `kid` is the key's RFC 7638 thumbprint. Verifiers find the matching public key at `/.well-known/jwks.json`. Only the issuer can sign, and anyone can verify. That's the point of an asymmetric key.
 
 **In AWS this is** Cognito's token endpoint with an app client and a resource server. Differences noted in the RFC (verify in AWS docs):
+
 - Cognito M2M access tokens carry `client_id` instead of `aud`;
 - Cognito scopes are prefixed by the resource server id;
 - a custom `tenant_id` claim needs a pre-token-generation trigger.
@@ -78,6 +82,7 @@ sequenceDiagram
 ```
 
 Where it happens:
+
 - **Agent token:** `src/core/issuer/token-issuer.ts` (`clientCredentials`).
 - **Gateway verification:** `src/apps/shared/bearer-auth.ts`, `src/core/auth/audience-token-verifier.ts`, `src/adapters/local/jose-jwt-verifier.ts`.
 - **Scope check:** `src/core/gateway/gateway-service.ts` (`callPlatformTool`) and `catalog.ts`.
@@ -102,6 +107,7 @@ Where it happens:
 **Analogy.** If a concierge handed your room key to every shop it called for you, any shop could walk into your room. Instead it hands each shop a one-time voucher valid only at that shop.
 
 **Technical.** The agent token says `aud = chainaudit-gateway`. For the MCP server to accept it, it would have to trust tokens addressed to someone else, and then any service that ever saw an agent token could replay it there. That's **token passthrough**, which the MCP authorization spec forbids, and it turns the gateway into a **confused deputy**. Instead:
+
 - Every hop accepts only its own audience.
 - Only the token's audience may exchange it (`subject_audience`).
 - An exchanged token can't be exchanged again: it has `act` and the wrong `aud`.
@@ -115,6 +121,7 @@ Where it happens:
 **Analogy.** The building checks your badge at the entrance, and the lab checks it again at its own door. A mistake at the entrance shouldn't open the lab.
 
 **Technical.**
+
 - **At the gateway**, `tools/list` is filtered (you only see what you may use), and `tools/call` checks the scope again. Nothing ties a call to an earlier list: clients can call any name, and a token can be narrower than the one used to list.
 - **At the MCP server**, `get_balance` checks `chain:read` itself. If a gateway bug lets a call through, or someone reaches the server by another path with a valid token for it, the tool still refuses.
 - **Default deny:** a tool missing from the scope map is neither listed nor callable.
@@ -131,6 +138,9 @@ Where it happens:
 | `trace_id` | The gateway starts a new trace, the MCP server continues it via `traceparent`, and every log line carries it |
 
 ## Code vs. RFC
+
 - **Audience format.** The RFC says audience = gateway. The code uses logical names (`chainaudit-gateway`), while the MCP authorization spec expects the server's canonical URI (RFC 8707). This was proposed in task 4a but isn't in the RFC.
 - **Token exchange rules.** The RFC's identity table doesn't say who may exchange. The code restricts exchange to the subject token's audience and adds `act`. This was proposed in task 4b but isn't in the RFC.
 - **Additional verification checks.** The RFC lists signature, issuer, audience, expiry and scopes. The code also pins the algorithm and requires `typ` and a set of claims.
+
+**Detailed flows with names:** [`docs/diagrams/03-end-to-end-flows.md`](../diagrams/03-end-to-end-flows.md): flow 4 (token issuance, every branch), flow 5 (token exchange inside the issuer), flow 8 (Northwind's wallet balance).

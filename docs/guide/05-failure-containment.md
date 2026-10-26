@@ -1,6 +1,7 @@
 # 05 · Failure containment
 
 > **Status**
+>
 > - **BUILT**:
 >   - timeouts: 2 s provider, 2 s tenant targets, 5 s platform targets, 2 s DNS, 2 s token exchange and JWKS;
 >   - circuit breaker per `tenant_id|target_id`;
@@ -9,6 +10,7 @@
 > - **DESIGN ONLY** (RFC "Third party failure containment"): retries with backoff and jitter, deadline propagation, bulkhead, rate limiting, degradation, breaker state shared through DynamoDB, separate SLO accounting for target failures.
 
 Acronyms used here:
+
 - **RPC**: Remote Procedure Call.
 - **SLO**: Service Level Objective.
 - **MCP**: Model Context Protocol.
@@ -49,6 +51,7 @@ stateDiagram-v2
 ```
 
 **Each transition:**
+
 - **Closed → Open.** Only a full window of 10 counts, so one early failure isn't "100%". At 50% failures the target is clearly unhealthy. From now on the agent gets a fast, clear error (`Target notes is temporarily unavailable (circuit open)`) instead of waiting 2 s, and the target gets room to recover.
 - **Open → HalfOpen.** There are no timers. The first call after 15 s moves the state, and that call becomes the probe.
 - **HalfOpen → Closed.** One success is enough proof. The window starts clean.
@@ -67,6 +70,7 @@ Calls that never reach the target (egress refusal, missing credential, missing s
 **Isolation.** The key is tenant **and** target. acme's broken `notes` doesn't change globex's `ledger`, nor acme's own `chain`. Platform targets also get one breaker per tenant, so one tenant's traffic can't open the platform breaker for everyone.
 
 **Every transition is logged** with the request's `trace_id`:
+
 ```json
 {"level":"warn","msg":"circuit breaker transition","trace_id":"…","tenant_id":"acme","target_id":"notes","from":"closed","to":"open","failures":10,"calls":10}
 ```
@@ -110,6 +114,7 @@ sequenceDiagram
 ```
 
 Expected log lines, in order:
+
 1. `"from":"closed","to":"open"`. It happens after 5 to 10 failures, depending on how many earlier successes are still in the window.
 2. `"from":"open","to":"half_open"` on the first call after 15 s.
 3. `"from":"half_open","to":"closed"` when the probe succeeds. Or `"from":"half_open","to":"open"` if you left the toxic in place.
@@ -129,8 +134,11 @@ Expected log lines, in order:
 **Analogy for the bulkhead:** watertight compartments, so one flooded room doesn't sink the ship. **For rate limiting:** a turnstile that lets a fixed number of people through per minute. **For degradation:** a shop showing "price as of this morning" when the live feed is down.
 
 ## Code vs. RFC
+
 - **Breaker parameters.** 10 / 50% / 15 s / 1 probe, versus the RFC's 20 / 30 s / 3 probes. Proposed as a "What changed" line, not yet approved.
 - **Breaker state.** In memory only, with no DynamoDB transitions.
 - **Tenant timeout.** Tenant targets get 2 s and platform targets 5 s. The RFC's single "2 s capped by deadline" has no deadline in the code.
 - **Work before the breaker check.** It runs after the cached registry read, the scope check, DNS and the secret read, so an open breaker saves the target call, not that local work.
 - **Probe.** The registration health probe bypasses the breaker and uses the 5 s default.
+
+**Detailed flows with names:** [`docs/diagrams/03-end-to-end-flows.md`](../diagrams/03-end-to-end-flows.md): flow 14 (the breaker during the chaos demo).

@@ -62,6 +62,7 @@ Two driving-side interfaces live in `src/apps/shared/`: `Authenticator` (filled 
 > **Analogy:** a kitchen's mise en place. Every ingredient is prepared and laid out in one spot, in the order the recipe needs, before cooking starts.
 
 **Technical.** Each app has exactly one `main.ts` that:
+
 1. parses configuration once with zod (`parseConfig(process.env)`);
 2. builds adapters;
 3. builds core services;
@@ -73,6 +74,7 @@ Nothing else reads `process.env`, and nothing else calls `new` on a dependency. 
 **In AWS this is…** the Lambda handler module's top level: it runs once per cold start and wires the same graph.
 
 ### mcp-server (`src/apps/mcp-server/main.ts`)
+
 ```mermaid
 flowchart TD
   H["McpHttpHandler (traceMode continue)"] -->|Authenticator| BA["BearerAuthenticator"]
@@ -85,6 +87,7 @@ flowchart TD
 ```
 
 ### gateway (`src/apps/gateway/main.ts`)
+
 ```mermaid
 flowchart TD
   MH["McpHttpHandler (traceMode start)"] -->|Authenticator| BA["BearerAuthenticator + PRM url"]
@@ -110,6 +113,7 @@ flowchart TD
 ```
 
 ### token-issuer (`src/apps/token-issuer/main.ts`)
+
 ```mermaid
 flowchart TD
   TH["TokenEndpointHandler"] -->|TokenIssuer| TI["DefaultTokenIssuer"]
@@ -124,9 +128,11 @@ flowchart TD
 ```
 
 ### tenant-sample-server (`src/apps/tenant-sample-server/main.ts`)
+
 `NotesHttpHandler(KeyGuard → ApiKeyGuard, NotesServerFactory → ClientNotesServerFactory, Logger → JsonLogger)`. It plays a third party, so it has no token verification, only an API key check.
 
 ## Shared app code
+
 - `bearer-auth.ts`: `BearerAuthenticator` turns `Authorization: Bearer …` into a `Principal`, or into a 401/503 with the right `WWW-Authenticate` header.
 - `mcp-http-handler.ts`: the stateless MCP request pipeline. It sets the trace id, authenticates, creates a per-request server and transport, and logs one `mcp request` line per call.
 - `trace.ts`: `traceIdFrom`, `newTraceId`, `traceparentFor`.
@@ -147,6 +153,7 @@ Six test files run with `pnpm test` (vitest). There are no mocking libraries, no
 | `core/resilience/circuit-breaker.test.ts` | Window rule, open, one probe, reopen, 4xx not counted |
 
 ## How to add a new tool
+
 1. **The tool.** On a platform server (e.g. the MCP server), register it in that server's factory, e.g. `ChainToolsServerFactory.create` with `server.registerTool(name, { inputSchema, outputSchema }, callback)`.
    - The callback must never throw: it maps errors to `isError`.
    - It checks its own scope (as `TOOL_SCOPES` does).
@@ -155,8 +162,12 @@ Six test files run with `pnpm test` (vitest). There are no mocking libraries, no
 4. **Tests.** Add a core test with fakes, and a check in `scripts/verify.sh`.
 
 ## How to add a new target type
+
 Today there are two: platform targets (`TargetConfig`, token exchange) and tenant targets (`TenantTarget`, API key). A new kind would need:
+
 1. **Its credential.** A new `TargetCredential` variant in `ports/target-client.ts` (e.g. `oauth_client_credentials`), and `credentialHeader` support in `McpTargetClient`.
 2. **Where it's stored and how it's obtained.** The `TenantTarget.authType` union, the registration body schema (`register-target-handler.ts`), and a resolver in `DefaultGatewayService` (next to `tenantCredential` / `platformCredential`).
 3. **A non-MCP protocol** (e.g. a plain REST/OpenAPI target, which AgentCore supports; verify in AWS docs). This means a new `TargetClient` adapter, plus a way to describe its tools (from the OpenAPI spec).
 4. **The same protections.** Egress validation, breaker keys `tenant|target`, and tests for isolation.
+
+**Detailed flows with names:** [`docs/diagrams/03-end-to-end-flows.md`](../diagrams/03-end-to-end-flows.md): flow 6 (inside the gateway, one request), flow 7 (tools/list aggregation).

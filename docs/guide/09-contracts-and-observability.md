@@ -1,10 +1,12 @@
 # 09 · Contracts and observability
 
 > **Status**
+>
 > - **BUILT**: MCP tool names, schemas and namespacing; W3C `traceparent` propagation from the gateway to platform and tenant targets; `trace_id` in every JSON log line; Jaeger running.
 > - **DESIGN ONLY**: OpenAPI specs and versioning (there are no spec files in the repo), the CI breaking-change check, OpenTelemetry spans, metrics, SLO measurement and burn-rate alerts.
 
 Acronyms used here:
+
 - **API**: Application Programming Interface.
 - **CI**: Continuous Integration.
 - **OTel**: OpenTelemetry.
@@ -17,7 +19,9 @@ Acronyms used here:
 **Analogy.** A restaurant menu. You can add dishes any time, but you don't silently change what "dish 12" is. If you must, it gets a new number, and the old one stays on the menu for a while.
 
 ### OpenAPI (design only)
+
 The RFC rules:
+
 - one spec per target, with the version in the path (`/v1`);
 - only additive changes inside a version (new optional fields, new endpoints);
 - a breaking change ships as `/v2`, while `/v1` keeps working with `Deprecation` and `Sunset` headers;
@@ -26,9 +30,11 @@ The RFC rules:
 None of this exists in the repo. The built targets speak MCP, not REST.
 
 ### MCP tools (applied today)
+
 The RFC rules: tool names are stable, new input parameters are optional, and a breaking change becomes a new tool name.
 
 In the code:
+
 - tools declare an input schema (zod) and, for `get_balance` and `get_client_note`, an output schema, so `structuredContent` is validated by the SDK;
 - the gateway exposes tools as `<target>__<tool>` and passes the upstream schemas through unchanged;
 - amounts are decimal strings, never JSON numbers, because a float64 can't hold wei values exactly.
@@ -40,6 +46,7 @@ In the code:
 **Analogy.** A tracking number on a parcel, written on the label at the first depot and copied onto every handover slip, but with no website yet to look the journey up.
 
 **Technical** (built):
+
 - The **gateway** starts every trace. It ignores an incoming `traceparent`, so callers can't inject or collide with trace ids. It creates `trace_id` and sends `traceparent: 00-<trace_id>-<span_id>-01` on every call to a target (`src/apps/shared/mcp-http-handler.ts`, `trace.ts`, `McpTargetClient`).
 - The **MCP server** and the **tenant sample server** continue the trace from that header.
 - **Every log line** of a request carries `trace_id` (and `tenant_id`, `sub` and `act` once known).
@@ -76,3 +83,5 @@ All four SLOs are design only, because nothing measures them yet. They're over 2
 | Final transactions visible after finality | 99% within 2 min | Design only | No ingestion |
 
 **Alerting (RFC).** Alerts fire on error-budget **burn rate**, not single failures. **Target failures are measured separately** from gateway failures, so a tenant's broken server doesn't burn the platform's budget. The breaker's `failure` classification (chapter 05) is the starting point for that split.
+
+**Detailed flows with names:** [`docs/diagrams/03-end-to-end-flows.md`](../diagrams/03-end-to-end-flows.md): flow 8 (trace_id across hops), flow 15 (error map).

@@ -3,11 +3,13 @@
 > Three likely questions per responsibility, each with a 3–5 sentence answer using this repo. **(design only)** marks answers that rely on parts that exist only in the RFC. Chapter numbers point to the detail.
 
 **Roles used in every answer:**
+
 - **Caseware** is the platform operator ("we").
 - **Tenants** are the audit firms that are Caseware's customers (`acme`, `globex`).
 - **Audit clients** are the companies those firms audit. They're data, not users.
 
 Acronyms used here:
+
 - **MCP**: Model Context Protocol.
 - **JWT**: JSON Web Token.
 - **JWKS**: JSON Web Key Set.
@@ -39,6 +41,7 @@ The registry stores only a `secret_ref` like `/tenants/acme/targets/notes`. The 
 
 **Q: How do you stop a tenant from registering a URL that attacks your internal network?**
 The URL must:
+
 - use HTTPS;
 - have a hostname, not an IP (any notation, since the URL parser canonicalises them);
 - be on the tenant's allowed domains;
@@ -50,6 +53,7 @@ At call time it's resolved and validated again, and the connection goes to exact
 
 **Q: How does an agent authenticate, and what does the gateway check?**
 The agent uses OAuth client credentials at the issuer and gets a 15-minute ES256 JWT. The gateway verifies it against the issuer's JWKS (cached, with a cooldown on unknown key ids) and checks:
+
 - the signature, with only ES256 accepted;
 - `typ: at+jwt`;
 - `iss`;
@@ -83,6 +87,7 @@ It's addressed to the gateway. Accepting it would mean the MCP server trusts tok
 
 **Q: What stops the gateway from minting tokens with more power?**
 The issuer verifies the subject token itself:
+
 - its `aud` must be the gateway;
 - it must not already carry `act`;
 - the requested scopes must be a subset of the subject's;
@@ -107,6 +112,7 @@ The RFC puts one spec per target in the repo, next to its code, so a change and 
 ## 7. Outbound authorization (ch. 03, 04, 06)
 
 **Q: Which credential does each outbound hop use?**
+
 - gateway → platform target: an exchanged JWT for that target;
 - gateway → tenant target: the tenant's API key, never a token;
 - MCP server → chain: no credential locally (Anvil). The RFC uses the tenant's own provider key from Secrets Manager (design only);
@@ -125,6 +131,7 @@ The gateway creates a `trace_id` and sends it as a W3C `traceparent` to every ta
 
 **Q: What are your SLOs, and how do you alert?** **(design only)**
 Per tenant, over 28 days:
+
 - 99.5% of tool calls without a gateway-caused error;
 - sync tool latency p95 under 800 ms, excluding provider time;
 - relay round trip p95 under 3 s;

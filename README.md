@@ -106,5 +106,5 @@ Other docs:
 - [`docs/rfc-001.md`](docs/rfc-001.md): the design, and what changed after building.
 - [`docs/verify.md`](docs/verify.md): the runbook.
 - [`docs/sql-lab.sql`](docs/sql-lab.sql): the SQL exercises.
-- [`docs/diagrams/`](docs/diagrams/): snapshots drawn from the code.
+- [`docs/diagrams/`](docs/diagrams/): snapshots drawn from the code. Start with [`03-end-to-end-flows.md`](docs/diagrams/03-end-to-end-flows.md): 16 detailed flows told with Caseware, acme, globex and Northwind.
 - [`CLAUDE.md`](CLAUDE.md): the rules for the AI agent.
