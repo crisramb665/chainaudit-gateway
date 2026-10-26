@@ -172,7 +172,7 @@ jwt "$A"
 curl -s -i -u agent-acme:acme-local-secret -d grant_type=client_credentials $ISS \
   | grep -Ei '^(cache-control|pragma)'
 
-# 3.5 No scope -> "scope":"chain:read recon:read recon:write"
+# 3.5 No scope -> "scope":"chain:read recon:read recon:write tenant:tools"
 tok agent-acme:acme-local-secret; echo
 
 # 3.6 Scope not allowed -> {"error":"invalid_scope",…} 400

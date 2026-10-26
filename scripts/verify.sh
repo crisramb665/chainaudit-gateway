@@ -141,7 +141,7 @@ expect_eq "agent token claims: iss, aud gateway, sub, tenant, 15 min, jti" \
   "http://localhost:3002 chainaudit-gateway agent-acme acme 900 true" \
   "$(claims "$A" | js '`${j.iss} ${j.aud} ${j.sub} ${j.tenant_id} ${j.exp-j.iat} ${!!j.jti}`')"
 req -u agent-acme:acme-local-secret -d grant_type=client_credentials "$ISSUER/oauth2/token"
-expect_eq "no scope -> every allowed scope" "chain:read recon:read recon:write" "$(printf '%s' "$BODY" | js 'j.scope')"
+expect_eq "no scope -> every allowed scope" "chain:read recon:read recon:write tenant:tools" "$(printf '%s' "$BODY" | js 'j.scope')"
 req -u agent-globex:globex-local-secret -d grant_type=client_credentials -d scope=recon:write "$ISSUER/oauth2/token"
 expect_eq "scope not allowed -> 400 invalid_scope" "400 invalid_scope" "$STATUS $(printf '%s' "$BODY" | js 'j.error')"
 req -u agent-acme:wrong -d grant_type=client_credentials "$ISSUER/oauth2/token"
@@ -256,6 +256,11 @@ expect_eq "acme CONFIG allows only hostnames (localhost)" '["localhost"]' \
 ADMIN=$(token acme-admin:acme-admin-local-secret)
 NOTES=$(target_body notes http://localhost:13003/mcp acme-sample-key)
 admin_post "$ADMIN" "$NOTES"
+if [[ $STATUS == 409 ]]; then
+  # An older notes target with another base_url (e.g. :3003 from before task 6) is still in DynamoDB Local.
+  printf '  \033[33mHINT\033[0m notes is registered with a different definition. DynamoDB Local is in memory:\n'
+  printf '       pnpm infra:down && pnpm infra:up && pnpm setup:dynamodb && pnpm seed:anvil, then pnpm verify again.\n'
+fi
 expect_eq "register notes -> 201 (first run) or 200 (already there), status active" "ok active" \
   "$([[ $STATUS == 201 || $STATUS == 200 ]] && echo ok || echo "$STATUS") $(printf '%s' "$BODY" | js 'j.status')"
 expect_eq "response carries secret_ref, never the key" "/tenants/acme/targets/notes false" \
